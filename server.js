@@ -1,139 +1,260 @@
 // ============================================
-// BACKEND LOBBY · Node.js + Express + PostgreSQL
+// BACKEND LOBBY v2 · Production-Ready
 // ============================================
-// npm install express pg dotenv cors bcrypt jsonwebtoken
-// npm start
-
 require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { z } = require('zod');
+
+// ============ ENV VALIDATION ============
+
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  console.error('❌ JWT_SECRET inválido. Use uma string aleatória de 32+ caracteres.');
+  process.exit(1);
+}
+
+if (!process.env.DATABASE_URL) {
+  console.error('❌ DATABASE_URL não configurada.');
+  process.exit(1);
+}
+
+const JWT_SECRET = process.env.JWT_SECRET;
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const IS_PROD = NODE_ENV === 'production';
 
 const app = express();
-app.use(cors());
-app.use(express.json());
 
-// ============ DATABASE CONNECTION ============
+// ============ SECURITY MIDDLEWARE ============
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://user:password@localhost:5432/lobby_hotel',
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
+
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5500').split(',');
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      return callback(null, true);
+    }
+    callback(new Error('CORS bloqueado: ' + origin));
+  },
+  credentials: true
+}));
+
+app.use(express.json({ limit: '100kb' }));
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  message: { error: 'Muitas requisições. Tente novamente em 15 minutos.' }
 });
 
-pool.on('error', (err) => console.error('Unexpected error on idle client', err));
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  skipSuccessfulRequests: true,
+  message: { error: 'Muitas tentativas de login. Aguarde 15 minutos.' }
+});
 
-// ============ MIDDLEWARE ============
+app.use('/api/', apiLimiter);
 
-// Verificar token JWT
+// ============ DATABASE ============
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: IS_PROD ? { rejectUnauthorized: false } : false,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000
+});
+
+pool.on('error', (err) => {
+  console.error('[DB POOL ERROR]', err.message);
+});
+
+// ============ ERROR HELPER ============
+
+function safeError(res, err, context = '') {
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  console.error(`[${id}] ${context}:`, err.message);
+  if (IS_PROD) {
+    return res.status(500).json({ error: 'Erro interno', refId: id });
+  }
+  return res.status(500).json({ error: err.message, refId: id });
+}
+
+// ============ AUTH MIDDLEWARE ============
+
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Token requerido' });
 
-  if (!token) return res.status(401).json({ error: 'Token required' });
-
-  jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key', (err, user) => {
-    if (err) return res.status(403).json({ error: 'Invalid token' });
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ error: 'Token expirado', code: 'TOKEN_EXPIRED' });
+      }
+      return res.status(403).json({ error: 'Token inválido' });
+    }
     req.user = user;
     next();
   });
 };
 
+const enforceHotelOwnership = (req, res, next) => {
+  const urlHotelId = req.params.hotelId;
+  const tokenHotelId = req.user.hotelId;
+  if (urlHotelId && urlHotelId !== tokenHotelId) {
+    console.warn(`[IDOR ATTEMPT] User ${req.user.id} tentou acessar hotel ${urlHotelId}`);
+    return res.status(403).json({ error: 'Acesso negado a este hotel' });
+  }
+  next();
+};
+
+// ============ VALIDATION SCHEMAS ============
+
+const schemas = {
+  login: z.object({
+    email: z.string().email().max(120),
+    password: z.string().min(6).max(200)
+  }),
+  guest: z.object({
+    cpf: z.string().min(11).max(20),
+    name: z.string().min(2).max(120),
+    rg: z.string().max(20).optional().nullable(),
+    birthDate: z.string().optional().nullable(),
+    email: z.string().email().max(120).optional().nullable().or(z.literal('')),
+    phone: z.string().max(20).optional().nullable(),
+    address: z.string().max(200).optional().nullable(),
+    city: z.string().max(80).optional().nullable(),
+    state: z.string().max(2).optional().nullable(),
+    zipcode: z.string().max(10).optional().nullable()
+  }),
+  stay: z.object({
+    guestId: z.string().uuid(),
+    roomId: z.string().uuid(),
+    reservationId: z.string().uuid().optional().nullable(),
+    numberOfNights: z.number().int().min(1).max(365),
+    dailyRate: z.number().positive()
+  }),
+  room: z.object({
+    roomNumber: z.string().max(10),
+    roomType: z.string().max(50),
+    capacity: z.number().int().min(1).max(20),
+    floor: z.number().int().min(0).max(100).optional().nullable(),
+    dailyRate: z.number().positive(),
+    amenities: z.array(z.string()).optional()
+  })
+};
+
+function validate(schema) {
+  return (req, res, next) => {
+    const result = schema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({
+        error: 'Dados inválidos',
+        details: result.error.issues.map(i => ({ field: i.path.join('.'), message: i.message }))
+      });
+    }
+    req.body = result.data;
+    next();
+  };
+}
+
+// ============ HEALTH CHECK ============
+
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(503).json({ status: 'db_down' });
+  }
+});
+
+app.get('/', (req, res) => {
+  res.json({ name: 'LOBBY Backend', status: 'running' });
+});
+
 // ============ AUTH ROUTES ============
 
-// 1. LOGIN
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', loginLimiter, validate(schemas.login), async (req, res) => {
   const { email, password } = req.body;
-
   try {
     const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     const user = result.rows[0];
 
-    if (!user) return res.status(401).json({ error: 'User not found' });
+    if (!user) {
+      await bcrypt.compare(password, '$2b$10$invalidplaceholderhashinvalidplaceholder');
+      return res.status(401).json({ error: 'Credenciais inválidas' });
+    }
 
     const validPassword = await bcrypt.compare(password, user.password_hash);
-    if (!validPassword) return res.status(401).json({ error: 'Invalid password' });
+    if (!validPassword) {
+      console.warn(`[FAILED LOGIN] ${email} from ${req.ip}`);
+      return res.status(401).json({ error: 'Credenciais inválidas' });
+    }
 
     const token = jwt.sign(
-      { id: user.id, hotelId: user.hotelId, role: user.role },
-      process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: '7d' }
+      { id: user.id, hotelId: user.hotelid, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '8h' }
     );
 
-    // Update lastLogin
     await pool.query('UPDATE users SET lastLogin = NOW() WHERE id = $1', [user.id]);
 
     res.json({
       token,
+      expiresIn: 8 * 3600,
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
         role: user.role,
-        hotelId: user.hotelId
+        hotelId: user.hotelid
       }
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    safeError(res, err, 'login');
   }
 });
 
-// 2. REGISTER (admin only)
-app.post('/api/auth/register', authenticateToken, async (req, res) => {
-  const { email, password, name, role } = req.body;
-
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Only admins can create users' });
-  }
-
-  try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const result = await pool.query(
-      'INSERT INTO users (hotelId, email, password_hash, name, role) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [req.user.hotelId, email, hashedPassword, name, role]
-    );
-
-    res.status(201).json({ user: result.rows[0] });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============ HOTELS ROUTES ============
-
-// 3. GET HOTEL INFO
-app.get('/api/hotels/:id', authenticateToken, async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM hotels WHERE id = $1', [req.params.id]);
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 4. UPDATE HOTEL
-app.put('/api/hotels/:id', authenticateToken, async (req, res) => {
-  const { name, address, city, state, phone, email } = req.body;
-
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
-      'UPDATE hotels SET name = $1, address = $2, city = $3, state = $4, phone = $5, email = $6, updatedAt = NOW() WHERE id = $7 RETURNING *',
-      [name, address, city, state, phone, email, req.params.id]
+      'SELECT id, email, name, role, hotelId FROM users WHERE id = $1',
+      [req.user.id]
     );
-
+    if (!result.rows[0]) return res.status(404).json({ error: 'Usuário não encontrado' });
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    safeError(res, err, 'auth/me');
   }
 });
 
-// ============ ROOMS ROUTES ============
+// ============ HOTELS ============
 
-// 5. GET ALL ROOMS
-app.get('/api/hotels/:hotelId/rooms', authenticateToken, async (req, res) => {
+app.get('/api/hotels/:hotelId', authenticateToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM hotels WHERE id = $1', [req.params.hotelId]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    safeError(res, err, 'getHotel');
+  }
+});
+
+// ============ ROOMS ============
+
+app.get('/api/hotels/:hotelId/rooms', authenticateToken, enforceHotelOwnership, async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT * FROM rooms WHERE hotelId = $1 ORDER BY roomNumber ASC',
@@ -141,435 +262,214 @@ app.get('/api/hotels/:hotelId/rooms', authenticateToken, async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    safeError(res, err, 'getRooms');
   }
 });
 
-// 6. CREATE ROOM
-app.post('/api/hotels/:hotelId/rooms', authenticateToken, async (req, res) => {
-  const { roomNumber, roomType, capacity, floor, dailyRate, amenities } = req.body;
+// ============ GUESTS ============
 
+app.get('/api/hotels/:hotelId/guests', authenticateToken, enforceHotelOwnership, async (req, res) => {
   try {
     const result = await pool.query(
-      'INSERT INTO rooms (hotelId, roomNumber, roomType, capacity, floor, dailyRate, amenities) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [req.params.hotelId, roomNumber, roomType, capacity, floor, dailyRate, amenities || []]
-    );
-
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 7. UPDATE ROOM STATUS
-app.put('/api/rooms/:id', authenticateToken, async (req, res) => {
-  const { status, currentGuest, checkoutDate } = req.body;
-
-  try {
-    const result = await pool.query(
-      'UPDATE rooms SET status = $1, currentGuest = $2, checkoutDate = $3, updatedAt = NOW() WHERE id = $4 RETURNING *',
-      [status, currentGuest, checkoutDate, req.params.id]
-    );
-
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============ GUESTS ROUTES ============
-
-// 8. GET ALL GUESTS
-app.get('/api/hotels/:hotelId/guests', authenticateToken, async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM guests WHERE hotelId = $1 ORDER BY totalStays DESC',
+      'SELECT * FROM guests WHERE hotelId = $1 ORDER BY totalStays DESC LIMIT 200',
       [req.params.hotelId]
     );
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    safeError(res, err, 'getGuests');
   }
 });
 
-// 9. GET GUEST BY CPF (para auto-preencher check-in)
-app.get('/api/hotels/:hotelId/guests/cpf/:cpf', authenticateToken, async (req, res) => {
+app.get('/api/hotels/:hotelId/guests/cpf/:cpf', authenticateToken, enforceHotelOwnership, async (req, res) => {
   try {
+    const cleanCpf = req.params.cpf.replace(/\D/g, '');
+    if (cleanCpf.length !== 11) return res.status(400).json({ error: 'CPF inválido' });
     const result = await pool.query(
       'SELECT * FROM guests WHERE hotelId = $1 AND cpf = $2',
-      [req.params.hotelId, req.params.cpf.replace(/\D/g, '')]
+      [req.params.hotelId, cleanCpf]
     );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Guest not found' });
-    }
-
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Hóspede não encontrado' });
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    safeError(res, err, 'getGuestByCpf');
   }
 });
 
-// 10. CREATE/UPDATE GUEST
-app.post('/api/hotels/:hotelId/guests', authenticateToken, async (req, res) => {
+app.post('/api/hotels/:hotelId/guests', authenticateToken, enforceHotelOwnership, validate(schemas.guest), async (req, res) => {
   const { cpf, rg, name, birthDate, email, phone, address, city, state, zipcode } = req.body;
-  const cleanCpf = cpf ? cpf.replace(/\D/g, '') : null;
+  const cleanCpf = cpf.replace(/\D/g, '');
 
   try {
-    // Check if guest exists
     const existing = await pool.query(
       'SELECT * FROM guests WHERE hotelId = $1 AND cpf = $2',
       [req.params.hotelId, cleanCpf]
     );
 
     if (existing.rows.length > 0) {
-      // Update existing
       const result = await pool.query(
-        'UPDATE guests SET name = $1, birthDate = $2, email = $3, phone = $4, address = $5, city = $6, state = $7, zipcode = $8, updatedAt = NOW() WHERE id = $9 RETURNING *',
-        [name, birthDate, email, phone, address, city, state, zipcode, existing.rows[0].id]
+        'UPDATE guests SET name=$1, birthDate=$2, email=$3, phone=$4, address=$5, city=$6, state=$7, zipcode=$8, updatedAt=NOW() WHERE id=$9 RETURNING *',
+        [name, birthDate || null, email || null, phone, address, city, state, zipcode, existing.rows[0].id]
       );
       return res.json(result.rows[0]);
     }
 
-    // Create new
     const result = await pool.query(
-      'INSERT INTO guests (hotelId, cpf, rg, name, birthDate, email, phone, address, city, state, zipcode) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *',
-      [req.params.hotelId, cleanCpf, rg, name, birthDate, email, phone, address, city, state, zipcode]
+      'INSERT INTO guests (hotelId, cpf, rg, name, birthDate, email, phone, address, city, state, zipcode) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *',
+      [req.params.hotelId, cleanCpf, rg, name, birthDate || null, email || null, phone, address, city, state, zipcode]
     );
-
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    safeError(res, err, 'createGuest');
   }
 });
 
-// ============ RESERVATIONS ROUTES ============
+// ============ STAYS (CHECK-IN / CHECK-OUT) ============
 
-// 11. GET RESERVATIONS
-app.get('/api/hotels/:hotelId/reservations', authenticateToken, async (req, res) => {
-  const { status, startDate, endDate } = req.query;
-
-  try {
-    let query = 'SELECT r.*, g.name as guestName, rm.roomNumber FROM reservations r JOIN guests g ON r.guestId = g.id JOIN rooms rm ON r.roomId = rm.id WHERE r.hotelId = $1';
-    let params = [req.params.hotelId];
-
-    if (status) {
-      query += ` AND r.status = $${params.length + 1}`;
-      params.push(status);
-    }
-
-    if (startDate) {
-      query += ` AND r.checkInDate >= $${params.length + 1}`;
-      params.push(startDate);
-    }
-
-    if (endDate) {
-      query += ` AND r.checkOutDate <= $${params.length + 1}`;
-      params.push(endDate);
-    }
-
-    query += ' ORDER BY r.checkInDate DESC';
-
-    const result = await pool.query(query, params);
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 12. CREATE RESERVATION
-app.post('/api/hotels/:hotelId/reservations', authenticateToken, async (req, res) => {
-  const { guestId, roomId, checkInDate, checkOutDate, numberOfGuests, channel, totalValue } = req.body;
-
-  try {
-    const numberOfNights = new Date(checkOutDate) - new Date(checkInDate);
-    const nights = Math.ceil(numberOfNights / (1000 * 60 * 60 * 24));
-
-    // Get room daily rate
-    const roomResult = await pool.query('SELECT dailyRate FROM rooms WHERE id = $1', [roomId]);
-    const dailyRate = roomResult.rows[0].dailyRate;
-
-    const result = await pool.query(
-      'INSERT INTO reservations (hotelId, guestId, roomId, checkInDate, checkOutDate, numberOfNights, numberOfGuests, channel, dailyRate, totalValue, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *',
-      [req.params.hotelId, guestId, roomId, checkInDate, checkOutDate, nights, numberOfGuests, channel, dailyRate, totalValue || (nights * dailyRate), 'confirmed']
-    );
-
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 13. UPDATE RESERVATION STATUS
-app.put('/api/reservations/:id', authenticateToken, async (req, res) => {
-  const { status } = req.body;
-
-  try {
-    const result = await pool.query(
-      'UPDATE reservations SET status = $1, updatedAt = NOW() WHERE id = $2 RETURNING *',
-      [status, req.params.id]
-    );
-
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============ CHECK-IN / CHECK-OUT (STAYS) ============
-
-// 14. CREATE STAY (CHECK-IN)
-app.post('/api/hotels/:hotelId/stays', authenticateToken, async (req, res) => {
+app.post('/api/hotels/:hotelId/stays', authenticateToken, enforceHotelOwnership, validate(schemas.stay), async (req, res) => {
   const { guestId, roomId, reservationId, numberOfNights, dailyRate } = req.body;
-
+  const client = await pool.connect();
   try {
-    // Update room status
-    await pool.query(
+    await client.query('BEGIN');
+
+    const roomCheck = await client.query(
+      'SELECT status FROM rooms WHERE id = $1 AND hotelId = $2 FOR UPDATE',
+      [roomId, req.params.hotelId]
+    );
+    if (!roomCheck.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Quarto não encontrado' });
+    }
+    if (roomCheck.rows[0].status === 'occupied') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Quarto já está ocupado' });
+    }
+
+    await client.query(
       'UPDATE rooms SET status = $1, currentGuest = $2 WHERE id = $3',
       ['occupied', guestId, roomId]
     );
 
-    // Create stay record
-    const result = await pool.query(
-      'INSERT INTO stays (hotelId, guestId, roomId, reservationId, checkInTime, numberOfNights, dailyRate, totalValue, paymentStatus) VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8) RETURNING *',
+    const stayResult = await client.query(
+      'INSERT INTO stays (hotelId, guestId, roomId, reservationId, checkInTime, numberOfNights, dailyRate, totalValue, paymentStatus) VALUES ($1,$2,$3,$4,NOW(),$5,$6,$7,$8) RETURNING *',
       [req.params.hotelId, guestId, roomId, reservationId, numberOfNights, dailyRate, numberOfNights * dailyRate, 'pending']
     );
 
-    // Update reservation status
     if (reservationId) {
-      await pool.query('UPDATE reservations SET status = $1 WHERE id = $2', ['checked-in', reservationId]);
+      await client.query('UPDATE reservations SET status = $1 WHERE id = $2', ['checked-in', reservationId]);
     }
 
-    res.status(201).json(result.rows[0]);
+    await client.query('COMMIT');
+    res.status(201).json(stayResult.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    await client.query('ROLLBACK');
+    safeError(res, err, 'checkin');
+  } finally {
+    client.release();
   }
 });
 
-// 15. COMPLETE STAY (CHECK-OUT)
 app.put('/api/stays/:id/checkout', authenticateToken, async (req, res) => {
   const { paymentMethod, paymentStatus } = req.body;
-
+  const client = await pool.connect();
   try {
-    const stayResult = await pool.query('SELECT * FROM stays WHERE id = $1', [req.params.id]);
+    await client.query('BEGIN');
+
+    const stayResult = await client.query(
+      'SELECT * FROM stays WHERE id = $1 AND hotelId = $2',
+      [req.params.id, req.user.hotelId]
+    );
+    if (!stayResult.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Hospedagem não encontrada' });
+    }
     const stay = stayResult.rows[0];
 
-    // Update stay
-    const result = await pool.query(
-      'UPDATE stays SET checkOutTime = NOW(), paymentMethod = $1, paymentStatus = $2, updatedAt = NOW() WHERE id = $3 RETURNING *',
+    const result = await client.query(
+      'UPDATE stays SET checkOutTime=NOW(), paymentMethod=$1, paymentStatus=$2, updatedAt=NOW() WHERE id=$3 RETURNING *',
       [paymentMethod, paymentStatus, req.params.id]
     );
 
-    // Update room status
-    await pool.query(
-      'UPDATE rooms SET status = $1, currentGuest = NULL, checkoutDate = NULL WHERE id = $2',
-      ['cleaning', stay.roomId]
+    await client.query(
+      'UPDATE rooms SET status=$1, currentGuest=NULL, checkoutDate=NULL WHERE id=$2',
+      ['cleaning', stay.roomid]
     );
 
-    // Update guest stats
-    await pool.query(
-      'UPDATE guests SET totalStays = totalStays + 1, totalSpent = totalSpent + $1, vipScore = vipScore + 10, lastVisit = NOW() WHERE id = $2',
-      [stay.totalValue || (stay.numberOfNights * stay.dailyRate), stay.guestId]
+    const totalValue = stay.totalvalue || (stay.numberofnights * stay.dailyrate);
+    await client.query(
+      'UPDATE guests SET totalStays=totalStays+1, totalSpent=totalSpent+$1, vipScore=vipScore+10, lastVisit=NOW() WHERE id=$2',
+      [totalValue, stay.guestid]
     );
 
+    await client.query('COMMIT');
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    await client.query('ROLLBACK');
+    safeError(res, err, 'checkout');
+  } finally {
+    client.release();
   }
 });
 
-// ============ CONSUMPTION (PDV) ============
-
-// 16. ADD CONSUMPTION
-app.post('/api/hotels/:hotelId/consumption', authenticateToken, async (req, res) => {
-  const { roomId, stayId, category, item, quantity, unitPrice } = req.body;
-  const totalPrice = quantity * unitPrice;
-
+app.get('/api/hotels/:hotelId/stays/active/room/:roomId', authenticateToken, enforceHotelOwnership, async (req, res) => {
   try {
     const result = await pool.query(
-      'INSERT INTO consumption (hotelId, roomId, stayId, category, item, quantity, unitPrice, totalPrice) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *',
-      [req.params.hotelId, roomId, stayId, category, item, quantity, unitPrice, totalPrice]
-    );
-
-    // Add to stay total
-    await pool.query(
-      'UPDATE stays SET extras = extras + $1 WHERE id = $2',
-      [totalPrice, stayId]
-    );
-
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 17. GET CONSUMPTION BY ROOM
-app.get('/api/hotels/:hotelId/consumption/room/:roomId', authenticateToken, async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM consumption WHERE hotelId = $1 AND roomId = $2 ORDER BY createdAt DESC',
+      `SELECT s.*, g.name as guestName, g.cpf 
+       FROM stays s 
+       JOIN guests g ON s.guestId = g.id 
+       WHERE s.hotelId = $1 AND s.roomId = $2 AND s.checkOutTime IS NULL 
+       ORDER BY s.checkInTime DESC LIMIT 1`,
       [req.params.hotelId, req.params.roomId]
     );
-    res.json(result.rows);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Nenhuma hospedagem ativa' });
+    res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    safeError(res, err, 'getActiveStay');
   }
 });
 
-// ============ INVOICES (NFS-e / FNRH) ============
+// ============ DASHBOARD ============
 
-// 18. CREATE INVOICE
-app.post('/api/hotels/:hotelId/invoices', authenticateToken, async (req, res) => {
-  const { stayId, guestName, guestCPF, totalValue, invoiceType } = req.body;
-
-  try {
-    // Generate invoice number
-    const countResult = await pool.query('SELECT COUNT(*) as count FROM invoices WHERE hotelId = $1', [req.params.hotelId]);
-    const invoiceNumber = `NFS-${new Date().getFullYear()}-${String(countResult.rows[0].count + 1).padStart(4, '0')}`;
-
-    const result = await pool.query(
-      'INSERT INTO invoices (hotelId, stayId, invoiceNumber, invoiceType, guestName, guestCPF, totalValue, issueDate, status) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8) RETURNING *',
-      [req.params.hotelId, stayId, invoiceNumber, invoiceType, guestName, guestCPF, totalValue, 'issued']
-    );
-
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============ DASHBOARD METRICS ============
-
-// 19. GET DASHBOARD STATS
-app.get('/api/hotels/:hotelId/dashboard/stats', authenticateToken, async (req, res) => {
+app.get('/api/hotels/:hotelId/dashboard/stats', authenticateToken, enforceHotelOwnership, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
         (SELECT COUNT(*) FROM rooms WHERE hotelId = $1) as totalRooms,
         (SELECT COUNT(*) FROM rooms WHERE hotelId = $1 AND status = 'occupied') as occupiedRooms,
+        (SELECT COUNT(*) FROM rooms WHERE hotelId = $1 AND status = 'available') as availableRooms,
+        (SELECT COUNT(*) FROM rooms WHERE hotelId = $1 AND status = 'cleaning') as cleaningRooms,
         (SELECT COUNT(*) FROM reservations WHERE hotelId = $1 AND checkInDate = CURRENT_DATE) as arrivalsToday,
-        (SELECT COUNT(*) FROM reservations WHERE hotelId = $1 AND checkOutDate = CURRENT_DATE) as departurestoday,
+        (SELECT COUNT(*) FROM reservations WHERE hotelId = $1 AND checkOutDate = CURRENT_DATE) as departuresToday,
         (SELECT COALESCE(SUM(totalValue), 0) FROM stays WHERE hotelId = $1 AND DATE(checkInTime) = CURRENT_DATE) as revenueToday,
-        (SELECT COALESCE(SUM(totalValue), 0) FROM stays WHERE hotelId = $1 AND DATE(checkInTime) >= CURRENT_DATE - INTERVAL '30 days') as revenueMonth
+        (SELECT COALESCE(SUM(totalValue), 0) FROM stays WHERE hotelId = $1 AND DATE(checkInTime) >= CURRENT_DATE - INTERVAL '30 days') as revenueMonth,
+        (SELECT COUNT(*) FROM guests WHERE hotelId = $1) as totalGuests
     `, [req.params.hotelId]);
-
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    safeError(res, err, 'dashboardStats');
   }
 });
 
-// 20. GET OCCUPANCY CHART DATA
-app.get('/api/hotels/:hotelId/dashboard/occupancy', authenticateToken, async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT 
-        DATE(checkInTime) as day,
-        ROUND(100.0 * COUNT(*) / (SELECT COUNT(*) FROM rooms WHERE hotelId = $1), 1) as occupancyRate
-      FROM stays
-      WHERE hotelId = $1 AND DATE(checkInTime) >= CURRENT_DATE - INTERVAL '30 days'
-      GROUP BY DATE(checkInTime)
-      ORDER BY day ASC
-    `, [req.params.hotelId]);
+// ============ 404 + ERROR HANDLER ============
 
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+app.use((req, res) => {
+  res.status(404).json({ error: 'Endpoint não encontrado' });
 });
-
-// 21. GET REVENUE CHART DATA
-app.get('/api/hotels/:hotelId/dashboard/revenue', authenticateToken, async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT 
-        DATE(checkInTime) as day,
-        COALESCE(SUM(totalValue), 0) as valor
-      FROM stays
-      WHERE hotelId = $1 AND DATE(checkInTime) >= CURRENT_DATE - INTERVAL '30 days'
-      GROUP BY DATE(checkInTime)
-      ORDER BY day ASC
-    `, [req.params.hotelId]);
-
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============ TARIFFS ============
-
-// 22. GET TARIFFS
-app.get('/api/hotels/:hotelId/tariffs', authenticateToken, async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM tariffs WHERE hotelId = $1 AND endDate >= CURRENT_DATE ORDER BY startDate DESC',
-      [req.params.hotelId]
-    );
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 23. CREATE/UPDATE TARIFF
-app.post('/api/hotels/:hotelId/tariffs', authenticateToken, async (req, res) => {
-  const { roomType, channel, startDate, endDate, price, minNights } = req.body;
-
-  try {
-    const result = await pool.query(
-      'INSERT INTO tariffs (hotelId, roomType, channel, startDate, endDate, price, minNights) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [req.params.hotelId, roomType, channel, startDate, endDate, price, minNights || 1]
-    );
-
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============ INTEGRATIONS ============
-
-// 24. GET INTEGRATIONS
-app.get('/api/hotels/:hotelId/integrations', authenticateToken, async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT id, type, status, lastSyncDate FROM integrations WHERE hotelId = $1',
-      [req.params.hotelId]
-    );
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 25. UPDATE INTEGRATION
-app.put('/api/integrations/:id', authenticateToken, async (req, res) => {
-  const { apiKey, apiSecret, status, syncFrequency } = req.body;
-
-  try {
-    const result = await pool.query(
-      'UPDATE integrations SET apiKey = $1, apiSecret = $2, status = $3, syncFrequency = $4 WHERE id = $5 RETURNING *',
-      [apiKey, apiSecret, status, syncFrequency, req.params.id]
-    );
-
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============ ERROR HANDLING ============
 
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Internal server error' });
+  safeError(res, err, 'unhandled');
 });
 
-// ============ START SERVER ============
+// ============ START ============
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`🚀 LOBBY Backend rodando em http://localhost:${PORT}`);
-  console.log(`📦 Database: ${process.env.DATABASE_URL || 'localhost'}`);
+  console.log(`🚀 LOBBY Backend v2 rodando na porta ${PORT}`);
+  console.log(`🔒 Modo: ${NODE_ENV}`);
+  console.log(`🌍 CORS permitido: ${allowedOrigins.join(', ')}`);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM recebido, fechando pool...');
+  await pool.end();
+  process.exit(0);
 });
