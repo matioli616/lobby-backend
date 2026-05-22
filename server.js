@@ -49,8 +49,8 @@ const findOne = (table, fn) => Array.from(DB[table].values()).find(fn) ?? null;
 const put     = (table, obj) => { DB[table].set(obj.id, obj); return obj; };
 
 // ============ SEED DATA ============
-const HOTEL_ID = 'demo-hotel-0001-0000-000000000001';
-const USER_ID  = 'demo-user--0001-0000-000000000002';
+const HOTEL_ID = 'a1b2c3d4-e5f6-4890-a123-456789abcdef';
+const USER_ID  = 'b1c2d3e4-f5a6-4890-b456-789abcdef012';
 
 put('users', { id: USER_ID, hotelId: HOTEL_ID, name: 'Admin Demo', email: 'admin@demo.com', password: 'demo123' });
 
