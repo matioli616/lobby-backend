@@ -11,7 +11,19 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const IS_PROD = NODE_ENV === 'production';
 
+if (!process.env.DATABASE_URL) {
+  console.error('FATAL: DATABASE_URL não definida. Configure a variável de ambiente no Render.');
+  process.exit(1);
+}
+if (!JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET não definida. Configure a variável de ambiente no Render.');
+  process.exit(1);
+}
+
 const app = express();
+
+// Render sits behind a reverse proxy — required for rate-limit and correct IP detection
+app.set('trust proxy', 1);
 
 // ============ SECURITY MIDDLEWARE ============
 app.use(helmet({
@@ -50,9 +62,10 @@ const apiLimiter = rateLimit({
 app.use(apiLimiter);
 
 // ============ DATABASE CONNECTION ============
+// Supabase requires SSL in all environments
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: IS_PROD ? { rejectUnauthorized: false } : false
+  ssl: { rejectUnauthorized: false }
 });
 
 pool.on('error', (err) => {
@@ -65,7 +78,8 @@ app.get('/health', async (req, res) => {
     await pool.query('SELECT 1');
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   } catch (err) {
-    res.status(503).json({ status: 'db_down' });
+    console.error('Health check - DB connection failed:', err.message);
+    res.status(503).json({ status: 'db_down', detail: IS_PROD ? undefined : err.message });
   }
 });
 
