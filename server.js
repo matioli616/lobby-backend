@@ -17,7 +17,7 @@ app.set('trust proxy', 1);
 // ============ SECURITY MIDDLEWARE ============
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://lobby-pdv-v2.vercel.app,http://localhost:3000')
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://lobby-backend-tp84.onrender.com,http://localhost:3000,http://localhost:10000')
   .split(',').map(o => o.trim());
 
 app.use(cors({
