@@ -1,4 +1,5 @@
 require('dotenv').config();
+const path = require('path');
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
@@ -255,7 +256,8 @@ app.put('/api/stays/:stayId/checkout', verifyToken, (req, res) => {
 });
 
 // ============ ROOT ============
-app.get('/', (req, res) => res.json({ name: 'LOBBY Backend', status: 'running', mode: 'demo' }));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/api/status', (req, res) => res.json({ name: 'LOBBY Backend', status: 'running', mode: 'demo' }));
 
 // ============ SERVER START ============
 const PORT = process.env.PORT || 10000;

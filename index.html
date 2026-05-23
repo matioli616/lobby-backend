@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LOBBY — Sistema de Gestão Hoteleira</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+--bg: #0A0A0B; --bg-soft: #131316; --surface: #18181B; --surface-hover: #1F1F23;
+--border: #27272A; --border-soft: #1F1F23; --text: #FAFAFA; --text-muted: #A1A1AA;
+--text-dim: #71717A; --accent: #3B82F6; --accent-hover: #2563EB;
+--success: #10B981; --warning: #F59E0B; --danger: #EF4444;
+--radius: 10px; --radius-sm: 6px; --shadow: 0 1px 2px rgba(0,0,0,0.4); --shadow-lg: 0 10px 30px rgba(0,0,0,0.5);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { font-family: 'Inter', -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; font-size: 14px; line-height: 1.5; }
+button { font-family: inherit; cursor: pointer; border: none; }
+input, select { font-family: inherit; }
+.app { display: none; min-height: 100vh; }
+.app.active { display: flex; }
+.sidebar { width: 240px; background: var(--bg-soft); border-right: 1px solid var(--border); padding: 24px 16px; display: flex; flex-direction: column; position: fixed; height: 100vh; z-index: 100; }
+.logo { font-size: 18px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 32px; padding: 0 8px; display: flex; align-items: center; gap: 8px; }
+.logo::before { content: ''; width: 8px; height: 8px; background: var(--accent); border-radius: 2px; }
+.nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.nav-item { background: none; color: var(--text-muted); padding: 10px 12px; border-radius: var(--radius-sm); text-align: left; font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 10px; transition: all 0.15s; }
+.nav-item:hover { background: var(--surface); color: var(--text); }
+.nav-item.active { background: var(--surface); color: var(--text); }
+.nav-icon { width: 16px; text-align: center; font-size: 14px; }
+.sidebar-footer { padding-top: 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+.user-card { padding: 8px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.user-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px; color: white; }
+.user-info-text { flex: 1; min-width: 0; }
+.user-info-text strong { display: block; font-size: 12px; }
+.user-info-text span { color: var(--text-dim); font-size: 11px; }
+.btn-logout { background: none; color: var(--text-muted); padding: 6px 8px; font-size: 12px; border-radius: 4px; }
+.btn-logout:hover { background: var(--surface); color: var(--danger); }
+.main { flex: 1; margin-left: 240px; padding: 32px 40px; min-height: 100vh; }
+.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.page-title { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }
+.page-subtitle { color: var(--text-muted); font-size: 13px; margin-top: 2px; }
+.page { display: none; }
+.page.active { display: block; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 32px; }
+.stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+.stat-label { color: var(--text-muted); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.stat-value { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
+.stat-value.green { color: var(--success); }
+.section-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+.rooms-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.room-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; cursor: pointer; transition: all 0.15s; }
+.room-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+.room-card.occupied { border-left: 3px solid var(--danger); }
+.room-card.available { border-left: 3px solid var(--success); }
+.room-card.cleaning { border-left: 3px solid var(--warning); }
+.room-number { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.room-meta { color: var(--text-muted); font-size: 12px; margin-bottom: 12px; }
+.room-price { font-size: 13px; font-weight: 600; }
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 500; margin-top: 8px; }
+.badge.green { background: rgba(16,185,129,0.12); color: var(--success); }
+.badge.red { background: rgba(239,68,68,0.12); color: var(--danger); }
+.badge.yellow { background: rgba(245,158,11,0.12); color: var(--warning); }
+.badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.form-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; max-width: 560px; }
+.form-group { margin-bottom: 16px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form-label { display: block; font-size: 12px; font-weight: 500; color: var(--text-muted); margin-bottom: 6px; }
+.form-input, .form-select { width: 100%; background: var(--bg-soft); border: 1px solid var(--border); color: var(--text); padding: 10px 12px; border-radius: var(--radius-sm); font-size: 14px; transition: all 0.15s; }
+.form-input:focus, .form-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+.form-input::placeholder { color: var(--text-dim); }
+.btn { padding: 10px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; transition: all 0.15s; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.btn-ghost:hover { background: var(--surface-hover); }
+.btn-block { width: 100%; }
+.login-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+.login-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 40px; width: 100%; max-width: 380px; }
+.login-logo { font-size: 20px; font-weight: 700; text-align: center; margin-bottom: 4px; letter-spacing: -0.5px; }
+.login-subtitle { text-align: center; color: var(--text-muted); font-size: 13px; margin-bottom: 28px; }
+.toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 16px; min-width: 280px; max-width: 400px; box-shadow: var(--shadow-lg); display: flex; align-items: center; gap: 10px; pointer-events: auto; animation: slideIn 0.2s ease-out; font-size: 13px; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+.toast.success { border-left: 3px solid var(--success); }
+.toast.error { border-left: 3px solid var(--danger); }
+.toast.info { border-left: 3px solid var(--accent); }
+.toast-icon { font-size: 16px; }
+.toast-msg { flex: 1; }
+.spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.2); border-top-color: white; border-radius: 50%; animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.skeleton { background: linear-gradient(90deg, var(--surface) 0%, var(--surface-hover) 50%, var(--surface) 100%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: var(--radius-sm); }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 1000; align-items: center; justify-content: center; padding: 20px; }
+.modal-overlay.active { display: flex; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto; animation: modalIn 0.15s ease-out; }
+@keyframes modalIn { from { transform: scale(0.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.modal-header { padding: 20px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.modal-title { font-size: 16px; font-weight: 600; }
+.modal-close { background: none; color: var(--text-muted); width: 28px; height: 28px; border-radius: 4px; font-size: 18px; display: flex; align-items: center; justify-content: center; }
+.modal-close:hover { background: var(--surface-hover); color: var(--text); }
+.modal-body { padding: 20px 24px; }
+.modal-footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+.list { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.list-item { padding: 14px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.15s; display: flex; justify-content: space-between; align-items: center; }
+.list-item:last-child { border-bottom: none; }
+.list-item:hover { background: var(--surface-hover); }
+.list-main strong { display: block; font-size: 14px; }
+.list-main span { color: var(--text-muted); font-size: 12px; }
+.empty { padding: 40px 20px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-soft); font-size: 13px; }
+.detail-row:last-child { border-bottom: none; }
+.detail-row span:first-child { color: var(--text-muted); }
+.detail-row span:last-child { font-weight: 500; }
+.mobile-menu-btn { display: none; position: fixed; top: 16px; left: 16px; z-index: 101; background: var(--surface); border: 1px solid var(--border); color: var(--text); width: 36px; height: 36px; border-radius: var(--radius-sm); align-items: center; justify-content: center; }
+@media (max-width: 768px) { .mobile-menu-btn { display: flex; } .sidebar { transform: translateX(-100%); transition: transform 0.2s; } .sidebar.open { transform: translateX(0); } .main { margin-left: 0; padding: 70px 20px 20px; } .form-row { grid-template-columns: 1fr; } .rooms-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); } }
+</style>
+</head>
+<body>
+<div class="toast-container" id="toasts"></div>
+<button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Menu">☰</button>
+
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">LOBBY</div>
+    <p class="login-subtitle">Sistema de gestão hoteleira</p>
+    <form id="loginForm" autocomplete="on">
+      <div class="form-group">
+        <label class="form-label" for="loginEmail">Email</label>
+        <input type="email" class="form-input" id="loginEmail" required autocomplete="email" placeholder="seu@email.com">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="loginPassword">Senha</label>
+        <input type="password" class="form-input" id="loginPassword" required autocomplete="current-password" placeholder="••••••••">
+      </div>
+      <button type="submit" class="btn btn-primary btn-block" id="loginBtn">Entrar</button>
+    </form>
+  </div>
+</div>
+
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="logo">LOBBY</div>
+    <nav class="nav">
+      <button class="nav-item active" data-page="dashboard"><span class="nav-icon">▦</span> Dashboard</button>
+      <button class="nav-item" data-page="checkin"><span class="nav-icon">→</span> Check-in</button>
+      <button class="nav-item" data-page="checkout"><span class="nav-icon">←</span> Check-out</button>
+      <button class="nav-item" data-page="rooms"><span class="nav-icon">▥</span> Quartos</button>
+      <button class="nav-item" data-page="guests"><span class="nav-icon">○</span> Hóspedes</button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-card">
+        <div class="user-avatar" id="userAvatar">A</div>
+        <div class="user-info-text">
+          <strong id="userName">Usuário</strong>
+          <span id="userEmail">email@example.com</span>
+        </div>
+      </div>
+      <button class="btn-logout" id="logoutBtn">Sair</button>
+    </div>
+  </aside>
+  <main class="main">
+    <section class="page active" id="page-dashboard">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Dashboard</h1>
+          <p class="page-subtitle" id="todayDate"></p>
+        </div>
+        <button class="btn btn-ghost" id="refreshBtn">↻ Atualizar</button>
+      </div>
+      <div class="stats-grid" id="statsGrid">
+        <div class="stat-card"><div class="skeleton" style="height:60px"></div></div>
+        <div class="stat-card"><div class="skeleton" style="height:60px"></div></div>
+        <div class="stat-card"><div class="skeleton" style="height:60px"></div></div>
+        <div class="stat-card"><div class="skeleton" style="height:60px"></div></div>
+      </div>
+      <h2 class="section-title">Status dos quartos</h2>
+      <div class="rooms-grid" id="roomsOverview"></div>
+    </section>
+    <section class="page" id="page-checkin">
+      <div class="page-header"><div><h1 class="page-title">Novo Check-in</h1><p class="page-subtitle">Cadastre um hóspede e atribua um quarto</p></div></div>
+      <div class="form-card">
+        <div class="form-group"><label class="form-label" for="cpf">CPF</label><input type="text" class="form-input" id="cpf" placeholder="000.000.000-00" maxlength="14" inputmode="numeric"></div>
+        <div class="form-group"><label class="form-label" for="guestName">Nome completo</label><input type="text" class="form-input" id="guestName" placeholder="João da Silva" maxlength="120"></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label" for="guestEmail">Email (opcional)</label><input type="email" class="form-input" id="guestEmail" placeholder="joao@email.com"></div>
+          <div class="form-group"><label class="form-label" for="guestPhone">Telefone</label><input type="tel" class="form-input" id="guestPhone" placeholder="(11) 98765-4321" maxlength="15"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label" for="checkinRoom">Quarto</label><select class="form-select" id="checkinRoom"></select></div>
+          <div class="form-group"><label class="form-label" for="nights">Noites</label><input type="number" class="form-input" id="nights" value="1" min="1" max="365"></div>
+        </div>
+        <button class="btn btn-primary btn-block" id="checkinBtn">Realizar check-in</button>
+      </div>
+    </section>
+    <section class="page" id="page-checkout">
+      <div class="page-header"><div><h1 class="page-title">Check-out</h1><p class="page-subtitle">Finalize a hospedagem e receba o pagamento</p></div></div>
+      <div class="form-card">
+        <div class="form-group"><label class="form-label" for="checkoutRoom">Quarto ocupado</label><select class="form-select" id="checkoutRoom"></select></div>
+        <div id="stayInfo" style="display:none">
+          <div class="detail-row"><span>Hóspede</span><span id="stayGuest">-</span></div>
+          <div class="detail-row"><span>Check-in</span><span id="stayCheckin">-</span></div>
+          <div class="detail-row"><span>Noites</span><span id="stayNights">-</span></div>
+          <div class="detail-row"><span>Diárias</span><span id="stayDailyTotal">-</span></div>
+          <div class="detail-row"><span>Extras</span><span id="stayExtras">-</span></div>
+          <div class="detail-row" style="font-weight:700;font-size:15px;padding-top:12px"><span>Total</span><span id="stayTotal">-</span></div>
+        </div>
+        <div class="form-group" style="margin-top:20px">
+          <label class="form-label" for="paymentMethod">Forma de pagamento</label>
+          <select class="form-select" id="paymentMethod">
+            <option value="cash">Dinheiro</option>
+            <option value="credit">Cartão de crédito</option>
+            <option value="debit">Cartão de débito</option>
+            <option value="pix">PIX</option>
+          </select>
+        </div>
+        <button class="btn btn-primary btn-block" id="checkoutBtn">Finalizar check-out</button>
+      </div>
+    </section>
+    <section class="page" id="page-rooms">
+      <div class="page-header"><div><h1 class="page-title">Quartos</h1><p class="page-subtitle" id="roomsSubtitle">Visão geral de todos os quartos</p></div></div>
+      <div class="rooms-grid" id="roomsFullGrid"></div>
+    </section>
+    <section class="page" id="page-guests">
+      <div class="page-header"><div><h1 class="page-title">Hóspedes</h1><p class="page-subtitle">Histórico de quem já passou pelo hotel</p></div></div>
+      <div class="form-group" style="max-width:400px;margin-bottom:16px"><input type="search" class="form-input" id="guestSearch" placeholder="Buscar por nome ou CPF..."></div>
+      <div class="list" id="guestsList"></div>
+    </section>
+  </main>
+</div>
+
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modalTitle">Detalhes</h3>
+      <button class="modal-close" id="modalClose">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const API_URL = '';
+const state = { user: null, hotelId: null, token: null, rooms: [], guests: [], currentStay: null };
+
+function $(id) { return document.getElementById(id); }
+
+function el(tag, props, children) {
+  const node = document.createElement(tag);
+  if (props) Object.entries(props).forEach(([k, v]) => {
+    if (k === 'class') node.className = v;
+    else if (k === 'on') Object.entries(v).forEach(([ev, fn]) => node.addEventListener(ev, fn));
+    else if (k === 'text') node.textContent = v;
+    else node.setAttribute(k, v);
+  });
+  if (children) (Array.isArray(children) ? children : [children]).forEach(c => {
+    if (c == null) return;
+    node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  });
+  return node;
+}
+
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+function toast(message, type) {
+  type = type || 'info';
+  const icons = { success: '✓', error: '✕', info: 'ⓘ' };
+  const t = el('div', { class: 'toast ' + type }, [
+    el('span', { class: 'toast-icon', text: icons[type] }),
+    el('span', { class: 'toast-msg', text: message })
+  ]);
+  $('toasts').appendChild(t);
+  setTimeout(function() { t.style.opacity = '0'; t.style.transition = 'opacity 0.2s'; setTimeout(function() { t.remove(); }, 200); }, 3500);
+}
+
+async function api(path, options) {
+  options = options || {};
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers);
+  if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
+  let response;
+  try { response = await fetch(API_URL + path, Object.assign({}, options, { headers })); }
+  catch (err) { throw new Error('Sem conexão com o servidor'); }
+  let data = null;
+  try { data = await response.json(); } catch(e) {}
+  if (response.status === 401 && data && data.code === 'TOKEN_EXPIRED') { logout(); throw new Error('Sessão expirada'); }
+  if (!response.ok) throw new Error((data && data.error) || ('Erro ' + response.status));
+  return data;
+}
+
+async function login(email, password) {
+  const btn = $('loginBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: email, password: password }) });
+    state.token = data.token;
+    state.user = data.user;
+    state.hotelId = data.user.hotelId;
+    sessionStorage.setItem('lobby_token', data.token);
+    sessionStorage.setItem('lobby_user', JSON.stringify(data.user));
+    showApp();
+    toast('Bem-vindo, ' + data.user.name, 'success');
+  } catch (err) {
+    toast(err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Entrar';
+  }
+}
+
+function logout() {
+  sessionStorage.removeItem('lobby_token');
+  sessionStorage.removeItem('lobby_user');
+  state.token = null; state.user = null; state.hotelId = null;
+  $('loginScreen').style.display = 'flex';
+  $('app').style.display = 'none';
+  $('loginForm').reset();
+}
+
+function showApp() {
+  $('loginScreen').style.display = 'none';
+  $('app').style.display = 'flex';
+  $('userName').textContent = state.user.name;
+  $('userEmail').textContent = state.user.email;
+  $('userAvatar').textContent = state.user.name.charAt(0).toUpperCase();
+  $('todayDate').textContent = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  loadDashboard();
+  loadRooms();
+}
+
+async function loadDashboard() {
+  try {
+    const stats = await api('/api/hotels/' + state.hotelId + '/dashboard/stats');
+    renderStats(stats);
+  } catch (err) { toast('Erro ao carregar dashboard: ' + err.message, 'error'); }
+}
+
+function renderStats(s) {
+  const grid = $('statsGrid');
+  clear(grid);
+  const occ = s.totalrooms > 0 ? Math.round((s.occupiedrooms / s.totalrooms) * 100) : 0;
+  const cards = [
+    { label: 'Ocupação', value: occ + '%', sub: s.occupiedrooms + '/' + s.totalrooms + ' quartos' },
+    { label: 'Chegadas hoje', value: s.arrivalstoday || 0 },
+    { label: 'Saídas hoje', value: s.departurestoday || 0 },
+    { label: 'Receita hoje', value: 'R$ ' + parseFloat(s.revenuetoday || 0).toFixed(2), klass: 'green' },
+    { label: 'Receita 30 dias', value: 'R$ ' + parseFloat(s.revenuemonth || 0).toFixed(2), klass: 'green' },
+    { label: 'Hóspedes', value: s.totalguests || 0 }
+  ];
+  cards.forEach(function(c) {
+    grid.appendChild(el('div', { class: 'stat-card' }, [
+      el('div', { class: 'stat-label', text: c.label }),
+      el('div', { class: 'stat-value ' + (c.klass || ''), text: String(c.value) }),
+      c.sub ? el('div', { class: 'stat-label', text: c.sub }) : null
+    ]));
+  });
+}
+
+async function loadRooms() {
+  try {
+    state.rooms = await api('/api/hotels/' + state.hotelId + '/rooms');
+    renderRooms();
+    populateRoomSelects();
+  } catch (err) { toast('Erro ao carregar quartos: ' + err.message, 'error'); }
+}
+
+function renderRooms() {
+  const overview = $('roomsOverview');
+  const full = $('roomsFullGrid');
+  clear(overview); clear(full);
+  if (!state.rooms.length) {
+    overview.appendChild(el('div', { class: 'empty', text: 'Nenhum quarto cadastrado' }));
+    full.appendChild(el('div', { class: 'empty', text: 'Nenhum quarto cadastrado' }));
+    return;
+  }
+  state.rooms.forEach(function(room) {
+    overview.appendChild(buildRoomCard(room));
+    full.appendChild(buildRoomCard(room));
+  });
+  const occ = state.rooms.filter(function(r) { return r.status === 'occupied'; }).length;
+  $('roomsSubtitle').textContent = state.rooms.length + ' quartos · ' + occ + ' ocupados';
+}
+
+function buildRoomCard(room) {
+  // Backend returns camelCase: roomNumber, roomType, dailyRate
+  const statusLabel = { available: 'Disponível', occupied: 'Ocupado', cleaning: 'Limpando' };
+  const badgeClass  = { available: 'badge green', occupied: 'badge red', cleaning: 'badge yellow' };
+  const label = statusLabel[room.status] || room.status;
+  const badge = badgeClass[room.status] || 'badge green';
+  return el('div', { class: 'room-card ' + room.status, on: { click: function() { showRoomDetails(room); } } }, [
+    el('div', { class: 'room-number', text: room.roomNumber }),
+    el('div', { class: 'room-meta', text: (room.roomType || '-') + ' · ' + room.capacity + ' pessoas' }),
+    el('div', { class: 'room-price', text: 'R$ ' + parseFloat(room.dailyRate).toFixed(2) + '/noite' }),
+    el('span', { class: badge, text: label })
+  ]);
+}
+
+function showRoomDetails(room) {
+  $('modalTitle').textContent = 'Quarto ' + room.roomNumber;
+  const body = $('modalBody');
+  clear(body);
+  [['Tipo', room.roomType], ['Capacidade', room.capacity + ' pessoas'], ['Diária', 'R$ ' + parseFloat(room.dailyRate).toFixed(2)],
+   ['Status', { available: 'Disponível', occupied: 'Ocupado', cleaning: 'Limpando' }[room.status] || room.status]
+  ].forEach(function(r) {
+    body.appendChild(el('div', { class: 'detail-row' }, [el('span', { text: r[0] }), el('span', { text: String(r[1]) })]));
+  });
+  $('modalOverlay').classList.add('active');
+}
+
+function populateRoomSelects() {
+  const ci = $('checkinRoom'), co = $('checkoutRoom');
+  clear(ci); clear(co);
+  ci.appendChild(el('option', { value: '', text: 'Selecione um quarto disponível' }));
+  co.appendChild(el('option', { value: '', text: 'Selecione um quarto ocupado' }));
+  state.rooms.forEach(function(room) {
+    const label = 'Quarto ' + room.roomNumber + ' · ' + room.roomType + ' · R$ ' + parseFloat(room.dailyRate).toFixed(2);
+    if (room.status === 'available') ci.appendChild(el('option', { value: room.id, text: label }));
+    if (room.status === 'occupied')  co.appendChild(el('option', { value: room.id, text: 'Quarto ' + room.roomNumber + ' · Ocupado' }));
+  });
+}
+
+function maskCPF(v) {
+  v = v.replace(/\D/g, '').slice(0, 11);
+  return v.replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d)/, '$1-$2');
+}
+
+function maskPhone(v) {
+  v = v.replace(/\D/g, '').slice(0, 11);
+  if (v.length > 10) return v.replace(/^(\d{2})(\d{5})(\d{4})$/, '($1) $2-$3');
+  if (v.length > 6)  return v.replace(/^(\d{2})(\d{4})(\d{0,4})$/, '($1) $2-$3');
+  if (v.length > 2)  return v.replace(/^(\d{2})(\d{0,5})$/, '($1) $2');
+  return v;
+}
+
+function validateCPF(cpf) {
+  cpf = cpf.replace(/\D/g, '');
+  if (cpf.length !== 11 || /^(\d)\1{10}$/.test(cpf)) return false;
+  let s = 0;
+  for (let i = 0; i < 9; i++) s += parseInt(cpf[i]) * (10 - i);
+  let d1 = (s * 10) % 11; if (d1 === 10) d1 = 0;
+  if (d1 !== parseInt(cpf[9])) return false;
+  s = 0;
+  for (let i = 0; i < 10; i++) s += parseInt(cpf[i]) * (11 - i);
+  let d2 = (s * 10) % 11; if (d2 === 10) d2 = 0;
+  return d2 === parseInt(cpf[10]);
+}
+
+async function performCheckin() {
+  const cpf = $('cpf').value, name = $('guestName').value.trim();
+  const email = $('guestEmail').value.trim(), phone = $('guestPhone').value;
+  const roomId = $('checkinRoom').value, nights = parseInt($('nights').value);
+  if (!cpf || !validateCPF(cpf)) return toast('CPF inválido', 'error');
+  if (!name || name.length < 3) return toast('Informe o nome completo', 'error');
+  if (!roomId) return toast('Selecione um quarto', 'error');
+  if (!nights || nights < 1) return toast('Número de noites inválido', 'error');
+  const btn = $('checkinBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Processando...';
+  try {
+    const guest = await api('/api/hotels/' + state.hotelId + '/guests', { method: 'POST', body: JSON.stringify({ cpf: cpf, name: name, email: email || null, phone: phone }) });
+    const room = state.rooms.find(function(r) { return r.id === roomId; });
+    await api('/api/hotels/' + state.hotelId + '/stays', { method: 'POST', body: JSON.stringify({ guestId: guest.id, roomId: roomId, numberOfNights: nights, dailyRate: parseFloat(room.dailyRate) }) });
+    toast('Check-in realizado · Quarto ' + room.roomNumber, 'success');
+    ['cpf','guestName','guestEmail','guestPhone'].forEach(function(id) { $(id).value = ''; });
+    $('nights').value = '1';
+    await loadRooms();
+    await loadDashboard();
+  } catch (err) { toast('Erro: ' + err.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Realizar check-in'; }
+}
+
+async function loadActiveStay(roomId) {
+  if (!roomId) { $('stayInfo').style.display = 'none'; state.currentStay = null; return; }
+  try {
+    const stay = await api('/api/hotels/' + state.hotelId + '/stays/active/room/' + roomId);
+    state.currentStay = stay;
+    $('stayGuest').textContent   = stay.guestname || 'Hóspede';
+    $('stayCheckin').textContent  = new Date(stay.checkinTime).toLocaleString('pt-BR');
+    $('stayNights').textContent   = stay.numberOfNights;
+    const daily = (stay.numberOfNights * parseFloat(stay.dailyRate)).toFixed(2);
+    $('stayDailyTotal').textContent = 'R$ ' + daily;
+    $('stayExtras').textContent   = 'R$ ' + parseFloat(stay.extras || 0).toFixed(2);
+    $('stayTotal').textContent    = 'R$ ' + (parseFloat(daily) + parseFloat(stay.extras || 0)).toFixed(2);
+    $('stayInfo').style.display = 'block';
+  } catch (err) { $('stayInfo').style.display = 'none'; toast('Hospedagem ativa não encontrada', 'error'); }
+}
+
+async function performCheckout() {
+  if (!state.currentStay) return toast('Selecione um quarto válido', 'error');
+  const btn = $('checkoutBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Processando...';
+  try {
+    await api('/api/stays/' + state.currentStay.id + '/checkout', { method: 'PUT', body: JSON.stringify({ paymentMethod: $('paymentMethod').value, paymentStatus: 'paid' }) });
+    toast('Check-out realizado com sucesso', 'success');
+    $('checkoutRoom').value = '';
+    $('stayInfo').style.display = 'none';
+    state.currentStay = null;
+    await loadRooms();
+    await loadDashboard();
+  } catch (err) { toast('Erro: ' + err.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Finalizar check-out'; }
+}
+
+async function loadGuests() {
+  try {
+    state.guests = await api('/api/hotels/' + state.hotelId + '/guests');
+    renderGuests(state.guests);
+  } catch (err) { toast('Erro ao carregar hóspedes: ' + err.message, 'error'); }
+}
+
+function renderGuests(list) {
+  const container = $('guestsList');
+  clear(container);
+  if (!list.length) { container.appendChild(el('div', { class: 'empty', text: 'Nenhum hóspede cadastrado ainda' })); return; }
+  list.forEach(function(g) {
+    container.appendChild(el('div', { class: 'list-item', on: { click: function() { showGuestDetails(g); } } }, [
+      el('div', { class: 'list-main' }, [
+        el('strong', { text: g.name }),
+        el('span', { text: 'CPF: ' + g.cpf + ' · ' + (g.totalStays || 0) + ' hospedagens' })
+      ]),
+      el('span', { class: 'badge green', text: 'R$ ' + parseFloat(g.totalSpent || 0).toFixed(2) })
+    ]));
+  });
+}
+
+function showGuestDetails(g) {
+  $('modalTitle').textContent = g.name;
+  const body = $('modalBody');
+  clear(body);
+  [['CPF', g.cpf], ['Email', g.email || '—'], ['Telefone', g.phone || '—'],
+   ['Hospedagens', g.totalStays || 0], ['Total gasto', 'R$ ' + parseFloat(g.totalSpent || 0).toFixed(2)], ['VIP Score', g.vipScore || 0]
+  ].forEach(function(r) {
+    body.appendChild(el('div', { class: 'detail-row' }, [el('span', { text: r[0] }), el('span', { text: String(r[1]) })]));
+  });
+  $('modalOverlay').classList.add('active');
+}
+
+function switchPage(pageName) {
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
+  $('page-' + pageName).classList.add('active');
+  document.querySelector('.nav-item[data-page="' + pageName + '"]').classList.add('active');
+  if (pageName === 'dashboard') { loadDashboard(); loadRooms(); }
+  if (pageName === 'rooms') loadRooms();
+  if (pageName === 'guests') loadGuests();
+  if (pageName === 'checkin' || pageName === 'checkout') loadRooms();
+  $('sidebar').classList.remove('open');
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  $('loginForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    login($('loginEmail').value, $('loginPassword').value);
+  });
+  $('logoutBtn').addEventListener('click', logout);
+  document.querySelectorAll('.nav-item').forEach(function(btn) {
+    btn.addEventListener('click', function() { switchPage(btn.dataset.page); });
+  });
+  $('refreshBtn').addEventListener('click', function() { loadDashboard(); loadRooms(); });
+  $('cpf').addEventListener('input', function(e) { e.target.value = maskCPF(e.target.value); });
+  $('guestPhone').addEventListener('input', function(e) { e.target.value = maskPhone(e.target.value); });
+  $('checkinBtn').addEventListener('click', performCheckin);
+  $('checkoutBtn').addEventListener('click', performCheckout);
+  $('checkoutRoom').addEventListener('change', function(e) { loadActiveStay(e.target.value); });
+  $('guestSearch').addEventListener('input', function(e) {
+    const q = e.target.value.toLowerCase();
+    renderGuests(state.guests.filter(function(g) { return g.name.toLowerCase().includes(q) || (g.cpf || '').includes(q); }));
+  });
+  $('modalClose').addEventListener('click', function() { $('modalOverlay').classList.remove('active'); });
+  $('modalOverlay').addEventListener('click', function(e) { if (e.target.id === 'modalOverlay') $('modalOverlay').classList.remove('active'); });
+  $('mobileMenuBtn').addEventListener('click', function() { $('sidebar').classList.toggle('open'); });
+
+  const token = sessionStorage.getItem('lobby_token');
+  const userStr = sessionStorage.getItem('lobby_user');
+  if (token && userStr) {
+    try { state.token = token; state.user = JSON.parse(userStr); state.hotelId = state.user.hotelId; showApp(); }
+    catch(e) { logout(); }
+  }
+});
+</script>
+</body>
+</html>
