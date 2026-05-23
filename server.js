@@ -54,6 +54,8 @@ const DB = {
   cleaning_staff:      new Map(),
   cleaning_tasks:      new Map(),
   cleaning_inspections:new Map(),
+  // Módulo FNRH
+  fnrh_records:        new Map(),
 };
 
 const find    = (table, fn) => Array.from(DB[table].values()).filter(fn);
@@ -134,12 +136,63 @@ for (const [roomId, assignedTo, status, priority, estimatedMinutes] of taskSeeds
   });
 }
 
+// Seed: FNRH demo para hospedagem ativa do João
+put('fnrh_records', {
+  id: randomUUID(), hotelId: HOTEL_ID, guestId: joaoId, stayId: activeStayId,
+  fullName: 'João Silva', documentType: 'CPF', documentNumber: '12345678901',
+  documentIssuer: 'SSP', documentIssuerState: 'SP',
+  birthDate: '1985-03-15', nationality: 'Brasileiro', gender: 'M',
+  profession: 'Engenheiro',
+  addressStreet: 'Rua das Flores', addressNumber: '123', addressComplement: null,
+  addressNeighborhood: 'Centro', addressCity: 'São Paulo', addressState: 'SP',
+  addressZipcode: '01310-100', addressCountry: 'Brasil',
+  arrivalDate: new Date(Date.now() - 86400000).toISOString().split('T')[0],
+  departureDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
+  transportMethod: 'carro', transportLicense: 'ABC-1234',
+  originCity: 'São Paulo', destinationCity: 'Rio de Janeiro',
+  purpose: 'turismo',
+  exportedToSismatur: false, exportedAt: null,
+  createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+});
+
 console.log('✅ Demo database pronto — login: admin@demo.com / demo123');
 
 // ============ HEALTH CHECK ============
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', mode: 'demo', timestamp: new Date().toISOString() });
 });
+
+// ============ FUNÇÕES UTILITÁRIAS ============
+
+// Remove acentos e converte para caixa alta (exportação SISMATUR)
+function removeAccents(str) {
+  if (!str) return '';
+  return str.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+}
+
+// Valida CPF com dígitos verificadores
+function validateCPFDoc(cpf) {
+  cpf = cpf.replace(/\D/g, '');
+  if (cpf.length !== 11 || /^(\d)\1{10}$/.test(cpf)) return false;
+  let sum = 0;
+  for (let i = 0; i < 9; i++) sum += parseInt(cpf[i]) * (10 - i);
+  let d1 = (sum * 10) % 11; if (d1 === 10) d1 = 0;
+  if (d1 !== parseInt(cpf[9])) return false;
+  sum = 0;
+  for (let i = 0; i < 10; i++) sum += parseInt(cpf[i]) * (11 - i);
+  let d2 = (sum * 10) % 11; if (d2 === 10) d2 = 0;
+  return d2 === parseInt(cpf[10]);
+}
+
+// Formata data YYYY-MM-DD → YYYYMMDD para SISMATUR
+function fmtDate(dateStr) {
+  return dateStr ? dateStr.replace(/-/g, '') : '';
+}
+
+const VALID_UFS = new Set([
+  'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG',
+  'PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO',
+]);
 
 // ============ VALIDATION SCHEMAS ============
 const LoginSchema = z.object({ email: z.string().email(), password: z.string().min(6) });
@@ -182,6 +235,49 @@ const InspectTaskSchema = z.object({
 const StaffLoginSchema = z.object({
   staffId: z.string().uuid(),
   pin:     z.string().regex(/^\d{4,6}$/),
+});
+
+// Schema FNRH — validações cruzadas via superRefine
+const FNRHSchema = z.object({
+  guestId:              z.string().uuid(),
+  stayId:               z.string().uuid(),
+  fullName:             z.string().min(3).max(200),
+  documentType:         z.enum(['CPF','RG','PASSAPORTE']),
+  documentNumber:       z.string().min(5).max(30),
+  documentIssuer:       z.string().max(50).optional().nullable(),
+  documentIssuerState:  z.string().length(2).optional().nullable(),
+  birthDate:            z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  nationality:          z.string().min(2).max(50).default('Brasileiro'),
+  gender:               z.enum(['M','F','O']).optional().nullable(),
+  profession:           z.string().max(100).optional().nullable(),
+  addressStreet:        z.string().min(3).max(200),
+  addressNumber:        z.string().max(20).optional().nullable(),
+  addressComplement:    z.string().max(100).optional().nullable(),
+  addressNeighborhood:  z.string().max(100).optional().nullable(),
+  addressCity:          z.string().min(2).max(100),
+  addressState:         z.string().length(2).toUpperCase(),
+  addressZipcode:       z.string().max(10).optional().nullable(),
+  addressCountry:       z.string().max(50).default('Brasil'),
+  arrivalDate:          z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  departureDate:        z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  transportMethod:      z.enum(['carro','onibus','aviao','trem','barco','outro']).optional().nullable(),
+  transportLicense:     z.string().max(20).optional().nullable(),
+  originCity:           z.string().max(100).optional().nullable(),
+  destinationCity:      z.string().max(100).optional().nullable(),
+  purpose:              z.enum(['turismo','negocios','evento','saude','estudo','outro']).optional().nullable(),
+}).superRefine((d, ctx) => {
+  // CPF: valida dígitos verificadores
+  if (d.documentType === 'CPF' && !validateCPFDoc(d.documentNumber))
+    ctx.addIssue({ code: 'custom', path: ['documentNumber'], message: 'CPF inválido' });
+  // birthDate não pode ser futura
+  if (new Date(d.birthDate) > new Date())
+    ctx.addIssue({ code: 'custom', path: ['birthDate'], message: 'Data de nascimento não pode ser futura' });
+  // arrivalDate < departureDate
+  if (d.arrivalDate >= d.departureDate)
+    ctx.addIssue({ code: 'custom', path: ['departureDate'], message: 'Data de saída deve ser após a chegada' });
+  // UF válida
+  if (!VALID_UFS.has(d.addressState.toUpperCase()))
+    ctx.addIssue({ code: 'custom', path: ['addressState'], message: 'UF inválida' });
 });
 
 // ============ MIDDLEWARE: ENFORCE HOTEL OWNERSHIP ============
@@ -609,6 +705,125 @@ app.get('/api/cleaning/my-tasks', verifyStaffToken, (req, res) => {
     roomType:   DB.rooms.get(t.roomId)?.roomType,
   }));
   res.json(tasks);
+});
+
+// ============ ROUTES: FNRH ============
+
+// Cria registro FNRH
+app.post('/api/hotels/:hotelId/fnrh', verifyToken, enforceHotelOwnership, (req, res) => {
+  try {
+    const data = FNRHSchema.parse(req.body);
+    const { hotelId } = req.params;
+
+    // Verifica se stay pertence ao hotel
+    const stay = DB.stays.get(data.stayId);
+    if (!stay || stay.hotelId !== hotelId)
+      return res.status(404).json({ error: 'Hospedagem não encontrada', code: 'NOT_FOUND' });
+
+    // Evita duplicata por stayId
+    const existing = findOne('fnrh_records', r => r.stayId === data.stayId);
+    if (existing)
+      return res.status(409).json({ error: 'FNRH já registrado para esta hospedagem', code: 'DUPLICATE', id: existing.id });
+
+    const record = put('fnrh_records', {
+      id: randomUUID(), hotelId, ...data,
+      exportedToSismatur: false, exportedAt: null,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+    res.status(201).json(record);
+  } catch (err) {
+    if (err instanceof z.ZodError)
+      return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR', details: err.errors });
+    res.status(500).json({ error: 'Erro ao criar FNRH', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Lista FNRHs com filtro por mês e exportação pendente — paginado (page/limit)
+app.get('/api/hotels/:hotelId/fnrh', verifyToken, enforceHotelOwnership, (req, res) => {
+  const { hotelId } = req.params;
+  const { month, exported, page = '1', limit = '20' } = req.query;
+
+  let records = find('fnrh_records', r => r.hotelId === hotelId);
+
+  // Filtra por mês (YYYY-MM) comparando arrivalDate
+  if (month) records = records.filter(r => r.arrivalDate.startsWith(month));
+
+  // Filtra por status de exportação
+  if (exported !== undefined)
+    records = records.filter(r => r.exportedToSismatur === (exported === 'true'));
+
+  // Ordena por arrivalDate desc
+  records.sort((a, b) => b.arrivalDate.localeCompare(a.arrivalDate));
+
+  // Paginação simples
+  const total   = records.length;
+  const pageNum = Math.max(1, parseInt(page));
+  const lim     = Math.min(100, Math.max(1, parseInt(limit)));
+  const data    = records.slice((pageNum - 1) * lim, pageNum * lim);
+
+  res.json({ total, page: pageNum, limit: lim, pages: Math.ceil(total / lim), data });
+});
+
+// Edita registro FNRH
+app.put('/api/hotels/:hotelId/fnrh/:recordId', verifyToken, enforceHotelOwnership, (req, res) => {
+  try {
+    const record = DB.fnrh_records.get(req.params.recordId);
+    if (!record || record.hotelId !== req.params.hotelId)
+      return res.status(404).json({ error: 'Registro não encontrado', code: 'NOT_FOUND' });
+    if (record.exportedToSismatur)
+      return res.status(400).json({ error: 'Registro já exportado não pode ser editado', code: 'ALREADY_EXPORTED' });
+
+    const updates = FNRHSchema.partial().parse(req.body);
+    Object.assign(record, updates, { updatedAt: new Date().toISOString() });
+    res.json(record);
+  } catch (err) {
+    if (err instanceof z.ZodError)
+      return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR', details: err.errors });
+    res.status(500).json({ error: 'Erro ao editar FNRH', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Exporta FNRH no formato SISMATUR (TXT pipe-separated)
+app.get('/api/hotels/:hotelId/fnrh/export', verifyToken, enforceHotelOwnership, (req, res) => {
+  const { hotelId } = req.params;
+  const { month } = req.query;
+
+  let records = find('fnrh_records', r => r.hotelId === hotelId && !r.exportedToSismatur);
+  if (month) records = records.filter(r => r.arrivalDate.startsWith(month));
+
+  if (!records.length)
+    return res.status(404).json({ error: 'Nenhum registro pendente de exportação', code: 'NOT_FOUND' });
+
+  // Monta linhas no padrão SISMATUR
+  const lines = records.map(r => [
+    removeAccents(r.fullName),
+    r.documentNumber.replace(/\D/g, ''),
+    fmtDate(r.birthDate),
+    removeAccents(r.nationality || 'BRASILEIRO'),
+    removeAccents(r.profession || ''),
+    removeAccents(`${r.addressStreet || ''} ${r.addressNumber || ''}`.trim()),
+    removeAccents(r.addressCity || ''),
+    (r.addressState || '').toUpperCase(),
+    (r.addressZipcode || '').replace(/\D/g, ''),
+    fmtDate(r.arrivalDate),
+    fmtDate(r.departureDate),
+    removeAccents(r.purpose || ''),
+    removeAccents(r.originCity || ''),
+    removeAccents(r.destinationCity || ''),
+    removeAccents(r.transportMethod || ''),
+  ].join('|'));
+
+  // Marca como exportados
+  const now = new Date().toISOString();
+  records.forEach(r => { r.exportedToSismatur = true; r.exportedAt = now; });
+
+  const filename = month
+    ? `fnrh_${month.replace('-','')}.txt`
+    : `fnrh_${new Date().toISOString().slice(0,7).replace('-','')}.txt`;
+
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(lines.join('\n'));
 });
 
 // ============ ROOT ============
