@@ -17,17 +17,24 @@ app.set('trust proxy', 1);
 // ============ SECURITY MIDDLEWARE ============
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://lobby-backend-tp84.onrender.com,http://localhost:3000,http://localhost:10000')
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:10000')
   .split(',').map(o => o.trim());
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*'))
-      return callback(null, true);
-    callback(new Error('CORS bloqueado: ' + origin));
-  },
-  credentials: true
-}));
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const serverOrigin = `${req.protocol}://${req.get('host')}`;
+  const allowed = !origin || origin === serverOrigin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*');
+  if (allowed) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    return next();
+  }
+  console.log('CORS bloqueado:', origin);
+  res.status(403).json({ error: 'Origem não permitida', code: 'CORS_ERROR' });
+});
 
 app.use(express.json({ limit: '100kb' }));
 
