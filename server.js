@@ -45,11 +45,15 @@ const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20,
 
 // ============ IN-MEMORY STORE (DEMO) ============
 const DB = {
-  users:    new Map(),
-  rooms:    new Map(),
-  guests:   new Map(),
-  stays:    new Map(),
-  invoices: new Map()
+  users:               new Map(),
+  rooms:               new Map(),
+  guests:              new Map(),
+  stays:               new Map(),
+  invoices:            new Map(),
+  // Módulo Governança
+  cleaning_staff:      new Map(),
+  cleaning_tasks:      new Map(),
+  cleaning_inspections:new Map(),
 };
 
 const find    = (table, fn) => Array.from(DB[table].values()).filter(fn);
@@ -98,6 +102,38 @@ put('stays', {
 });
 DB.rooms.get(roomIds['201']).status = 'occupied';
 
+// Seed: faxineiras demo
+const staffDefs = [
+  ['Ana Lima',      '11988880001', '1234'],
+  ['Beatriz Costa', '11988880002', '5678'],
+  ['Carla Mendes',  '11988880003', '9012'],
+];
+const staffIds = [];
+for (const [name, phone, pin] of staffDefs) {
+  const id = randomUUID();
+  staffIds.push(id);
+  put('cleaning_staff', { id, hotelId: HOTEL_ID, name, phone, pin, isActive: true, createdAt: new Date().toISOString() });
+}
+
+// Seed: tarefas demo para quartos disponíveis
+const taskSeeds = [
+  [roomIds['101'], staffIds[0], 'pending',     'normal', 30],
+  [roomIds['102'], staffIds[1], 'in_progress', 'high',   45],
+  [roomIds['103'], staffIds[2], 'done',        'normal', 25],
+  [roomIds['301'], staffIds[0], 'pending',     'urgent', 60],
+];
+for (const [roomId, assignedTo, status, priority, estimatedMinutes] of taskSeeds) {
+  put('cleaning_tasks', {
+    id: randomUUID(), hotelId: HOTEL_ID, roomId, assignedTo, status, priority,
+    estimatedMinutes, actualMinutes: status === 'done' ? 28 : null,
+    notes: null,
+    startedAt: status !== 'pending' ? new Date(Date.now() - 1800000).toISOString() : null,
+    completedAt: status === 'done'  ? new Date(Date.now() -  900000).toISOString() : null,
+    inspectedAt: null, inspectedBy: null,
+    createdAt: new Date().toISOString(),
+  });
+}
+
 console.log('✅ Demo database pronto — login: admin@demo.com / demo123');
 
 // ============ HEALTH CHECK ============
@@ -120,6 +156,34 @@ const StaySchema = z.object({
   dailyRate: z.number().min(0)
 });
 
+// Schemas: Governança
+const CleaningStaffSchema = z.object({
+  name:  z.string().min(3).max(120),
+  pin:   z.string().regex(/^\d{4,6}$/, 'PIN deve ter 4–6 dígitos'),
+  phone: z.string().regex(/^[\d\s()\-+]{10,15}$/).optional().nullable(),
+  isActive: z.boolean().optional(),
+});
+const CleaningTaskSchema = z.object({
+  roomId:           z.string().uuid(),
+  assignedTo:       z.string().uuid().optional().nullable(),
+  priority:         z.enum(['low','normal','high','urgent']).default('normal'),
+  estimatedMinutes: z.number().min(5).max(480).default(30),
+  notes:            z.string().max(500).optional().nullable(),
+});
+const CompleteTaskSchema = z.object({
+  actualMinutes: z.number().min(1).max(480).optional().nullable(),
+  notes:         z.string().max(500).optional().nullable(),
+});
+const InspectTaskSchema = z.object({
+  score:  z.number().min(1).max(5),
+  notes:  z.string().max(500).optional().nullable(),
+  passed: z.boolean(),
+});
+const StaffLoginSchema = z.object({
+  staffId: z.string().uuid(),
+  pin:     z.string().regex(/^\d{4,6}$/),
+});
+
 // ============ MIDDLEWARE: ENFORCE HOTEL OWNERSHIP ============
 function enforceHotelOwnership(req, res, next) {
   const user = DB.users.get(req.user.id);
@@ -134,6 +198,23 @@ function verifyToken(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Token ausente', code: 'NO_TOKEN' });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch (err) {
+    const code = err.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'INVALID_TOKEN';
+    res.status(401).json({ error: 'Token inválido', code });
+  }
+}
+
+// ============ MIDDLEWARE: VERIFY STAFF TOKEN ============
+// Valida JWT emitido para faxineiras (role = 'cleaning_staff')
+function verifyStaffToken(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Token ausente', code: 'NO_TOKEN' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== 'cleaning_staff')
+      return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
+    req.staff = decoded;
     next();
   } catch (err) {
     const code = err.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'INVALID_TOKEN';
@@ -260,6 +341,274 @@ app.put('/api/stays/:stayId/checkout', verifyToken, (req, res) => {
   if (room) room.status = 'available';
 
   res.json({ success: true, total });
+});
+
+// ============ ROUTES: GOVERNANÇA — STAFF ============
+
+// Lista todas as faxineiras do hotel
+app.get('/api/hotels/:hotelId/cleaning/staff', verifyToken, enforceHotelOwnership, (req, res) => {
+  const staff = find('cleaning_staff', s => s.hotelId === req.params.hotelId)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  res.json(staff.map(({ pin, ...s }) => s)); // nunca expõe o PIN
+});
+
+// Cria nova faxineira
+app.post('/api/hotels/:hotelId/cleaning/staff', verifyToken, enforceHotelOwnership, (req, res) => {
+  try {
+    const { name, pin, phone } = CleaningStaffSchema.parse(req.body);
+    const staff = put('cleaning_staff', {
+      id: randomUUID(), hotelId: req.params.hotelId,
+      name, phone: phone || null, pin, isActive: true,
+      createdAt: new Date().toISOString(),
+    });
+    const { pin: _, ...out } = staff;
+    res.status(201).json(out);
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
+    res.status(500).json({ error: 'Erro ao criar faxineira', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Atualiza faxineira
+app.put('/api/hotels/:hotelId/cleaning/staff/:staffId', verifyToken, enforceHotelOwnership, (req, res) => {
+  try {
+    const staff = DB.cleaning_staff.get(req.params.staffId);
+    if (!staff || staff.hotelId !== req.params.hotelId)
+      return res.status(404).json({ error: 'Faxineira não encontrada', code: 'NOT_FOUND' });
+    const updates = CleaningStaffSchema.partial().parse(req.body);
+    Object.assign(staff, updates);
+    const { pin: _, ...out } = staff;
+    res.json(out);
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
+    res.status(500).json({ error: 'Erro ao atualizar faxineira', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Remove (desativa) faxineira
+app.delete('/api/hotels/:hotelId/cleaning/staff/:staffId', verifyToken, enforceHotelOwnership, (req, res) => {
+  const staff = DB.cleaning_staff.get(req.params.staffId);
+  if (!staff || staff.hotelId !== req.params.hotelId)
+    return res.status(404).json({ error: 'Faxineira não encontrada', code: 'NOT_FOUND' });
+  staff.isActive = false;
+  res.json({ success: true });
+});
+
+// ============ ROUTES: GOVERNANÇA — TASKS ============
+
+// Lista tarefas com filtros opcionais: ?status=pending&date=today&staffId=X
+app.get('/api/hotels/:hotelId/cleaning/tasks', verifyToken, enforceHotelOwnership, (req, res) => {
+  const { hotelId } = req.params;
+  const { status, date, staffId } = req.query;
+  const todayStr = new Date().toDateString();
+
+  let tasks = find('cleaning_tasks', t => t.hotelId === hotelId);
+
+  if (status)   tasks = tasks.filter(t => t.status === status);
+  if (staffId)  tasks = tasks.filter(t => t.assignedTo === staffId);
+  if (date === 'today') tasks = tasks.filter(t => new Date(t.createdAt).toDateString() === todayStr);
+
+  // Enriquece com nome do quarto e da faxineira
+  const priorityOrder = { urgent: 0, high: 1, normal: 2, low: 3 };
+  const enriched = tasks
+    .sort((a, b) => (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9))
+    .map(t => ({
+      ...t,
+      roomNumber: DB.rooms.get(t.roomId)?.roomNumber,
+      staffName:  t.assignedTo ? DB.cleaning_staff.get(t.assignedTo)?.name : null,
+    }));
+
+  res.json(enriched);
+});
+
+// Cria nova tarefa de limpeza
+app.post('/api/hotels/:hotelId/cleaning/tasks', verifyToken, enforceHotelOwnership, (req, res) => {
+  try {
+    const { roomId, assignedTo, priority, estimatedMinutes, notes } = CleaningTaskSchema.parse(req.body);
+    const { hotelId } = req.params;
+    const room = DB.rooms.get(roomId);
+    if (!room || room.hotelId !== hotelId)
+      return res.status(404).json({ error: 'Quarto não encontrado', code: 'NOT_FOUND' });
+    if (assignedTo) {
+      const staff = DB.cleaning_staff.get(assignedTo);
+      if (!staff || staff.hotelId !== hotelId || !staff.isActive)
+        return res.status(400).json({ error: 'Faxineira inativa ou inválida', code: 'INVALID_STAFF' });
+    }
+    const task = put('cleaning_tasks', {
+      id: randomUUID(), hotelId, roomId, assignedTo: assignedTo || null,
+      status: 'pending', priority, estimatedMinutes, actualMinutes: null,
+      notes: notes || null, startedAt: null, completedAt: null,
+      inspectedAt: null, inspectedBy: null, createdAt: new Date().toISOString(),
+    });
+    res.status(201).json(task);
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
+    res.status(500).json({ error: 'Erro ao criar tarefa', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Inicia tarefa
+app.put('/api/cleaning/tasks/:taskId/start', verifyToken, (req, res) => {
+  const task = DB.cleaning_tasks.get(req.params.taskId);
+  if (!task) return res.status(404).json({ error: 'Tarefa não encontrada', code: 'NOT_FOUND' });
+  if (task.status !== 'pending')
+    return res.status(400).json({ error: 'Tarefa não está pendente', code: 'INVALID_STATUS' });
+  task.status = 'in_progress';
+  task.startedAt = new Date().toISOString();
+  // Marca quarto como em limpeza
+  const room = DB.rooms.get(task.roomId);
+  if (room) room.status = 'cleaning';
+  res.json(task);
+});
+
+// Conclui tarefa
+app.put('/api/cleaning/tasks/:taskId/complete', verifyToken, (req, res) => {
+  try {
+    const task = DB.cleaning_tasks.get(req.params.taskId);
+    if (!task) return res.status(404).json({ error: 'Tarefa não encontrada', code: 'NOT_FOUND' });
+    if (task.status !== 'in_progress')
+      return res.status(400).json({ error: 'Tarefa não está em andamento', code: 'INVALID_STATUS' });
+    const { actualMinutes, notes } = CompleteTaskSchema.parse(req.body);
+    const now = new Date();
+    // Calcula tempo real se não informado mas startedAt existe
+    const calcMinutes = actualMinutes ?? (task.startedAt
+      ? Math.round((now - new Date(task.startedAt)) / 60000)
+      : null);
+    task.status = 'done';
+    task.completedAt = now.toISOString();
+    task.actualMinutes = calcMinutes;
+    if (notes) task.notes = notes;
+    res.json(task);
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
+    res.status(500).json({ error: 'Erro ao concluir tarefa', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Inspeciona tarefa
+app.put('/api/cleaning/tasks/:taskId/inspect', verifyToken, (req, res) => {
+  try {
+    const task = DB.cleaning_tasks.get(req.params.taskId);
+    if (!task) return res.status(404).json({ error: 'Tarefa não encontrada', code: 'NOT_FOUND' });
+    if (task.status !== 'done')
+      return res.status(400).json({ error: 'Tarefa ainda não concluída', code: 'INVALID_STATUS' });
+    const { score, notes, passed } = InspectTaskSchema.parse(req.body);
+
+    // Cria registro de inspeção
+    put('cleaning_inspections', {
+      id: randomUUID(), taskId: task.id, score, notes: notes || null,
+      passed, createdAt: new Date().toISOString(),
+    });
+
+    task.inspectedAt = new Date().toISOString();
+    task.inspectedBy = req.user.id;
+
+    if (passed) {
+      task.status = 'inspected';
+      const room = DB.rooms.get(task.roomId);
+      if (room) room.status = 'available';
+    } else {
+      // Reprovado: volta para pendente e cria nova tarefa de retorno
+      task.status = 'inspection_failed';
+      put('cleaning_tasks', {
+        id: randomUUID(), hotelId: task.hotelId, roomId: task.roomId,
+        assignedTo: task.assignedTo, status: 'pending', priority: 'high',
+        estimatedMinutes: task.estimatedMinutes, actualMinutes: null,
+        notes: `Retrabalho — inspeção reprovada (nota ${score}/5): ${notes || ''}`,
+        startedAt: null, completedAt: null, inspectedAt: null, inspectedBy: null,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    res.json({ task, passed });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
+    res.status(500).json({ error: 'Erro ao inspecionar tarefa', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Gera tarefas do dia baseado nos checkouts
+app.post('/api/hotels/:hotelId/cleaning/tasks/generate-daily', verifyToken, enforceHotelOwnership, (req, res) => {
+  const { hotelId } = req.params;
+  const todayStr  = new Date().toDateString();
+  const tomorrowStr = new Date(Date.now() + 86400000).toDateString();
+
+  // Quartos com checkout hoje
+  const checkoutsToday = find('stays', s =>
+    s.hotelId === hotelId && s.checkoutTime &&
+    new Date(s.checkoutTime).toDateString() === todayStr
+  );
+
+  if (!checkoutsToday.length)
+    return res.json({ created: 0, message: 'Nenhum checkout hoje' });
+
+  // Faxineiras ativas para round-robin
+  const activeStaff = find('cleaning_staff', s => s.hotelId === hotelId && s.isActive);
+
+  const created = [];
+  checkoutsToday.forEach((stay, idx) => {
+    // Evita duplicar tarefas já criadas hoje para o mesmo quarto
+    const alreadyExists = findOne('cleaning_tasks', t =>
+      t.hotelId === hotelId && t.roomId === stay.roomId &&
+      new Date(t.createdAt).toDateString() === todayStr &&
+      t.status !== 'inspection_failed'
+    );
+    if (alreadyExists) return;
+
+    // Define prioridade
+    const hasCheckinToday     = findOne('stays', s => s.hotelId === hotelId && s.roomId === stay.roomId && !s.checkoutTime && new Date(s.checkinTime).toDateString() === todayStr);
+    const hasCheckinTomorrow  = findOne('stays', s => s.hotelId === hotelId && s.roomId === stay.roomId && !s.checkoutTime && new Date(s.checkinTime).toDateString() === tomorrowStr);
+    const priority = hasCheckinToday ? 'urgent' : hasCheckinTomorrow ? 'high' : 'normal';
+
+    // Round-robin entre faxineiras
+    const assignedTo = activeStaff.length ? activeStaff[idx % activeStaff.length].id : null;
+
+    const task = put('cleaning_tasks', {
+      id: randomUUID(), hotelId, roomId: stay.roomId, assignedTo,
+      status: 'pending', priority, estimatedMinutes: 30, actualMinutes: null,
+      notes: null, startedAt: null, completedAt: null,
+      inspectedAt: null, inspectedBy: null, createdAt: new Date().toISOString(),
+    });
+    created.push(task);
+  });
+
+  res.status(201).json({ created: created.length, tasks: created });
+});
+
+// ============ ROUTES: GOVERNANÇA — APP FAXINEIRA ============
+
+// Login da faxineira com staffId + PIN
+app.post('/api/cleaning/auth/login', loginLimiter, (req, res) => {
+  try {
+    const { staffId, pin } = StaffLoginSchema.parse(req.body);
+    const staff = DB.cleaning_staff.get(staffId);
+    if (!staff || staff.pin !== pin || !staff.isActive)
+      return res.status(401).json({ error: 'PIN inválido ou conta inativa', code: 'INVALID_CREDENTIALS' });
+    const token = jwt.sign(
+      { id: staff.id, hotelId: staff.hotelId, name: staff.name, role: 'cleaning_staff' },
+      JWT_SECRET,
+      { expiresIn: '12h' }
+    );
+    const { pin: _, ...safeStaff } = staff;
+    res.json({ token, staff: safeStaff });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
+    res.status(500).json({ error: 'Erro no login', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Minhas tarefas (app da faxineira)
+app.get('/api/cleaning/my-tasks', verifyStaffToken, (req, res) => {
+  const priorityOrder = { urgent: 0, high: 1, normal: 2, low: 3 };
+  const tasks = find('cleaning_tasks', t =>
+    t.assignedTo === req.staff.id && ['pending','in_progress'].includes(t.status)
+  )
+  .sort((a, b) => (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9))
+  .map(t => ({
+    ...t,
+    roomNumber: DB.rooms.get(t.roomId)?.roomNumber,
+    roomType:   DB.rooms.get(t.roomId)?.roomType,
+  }));
+  res.json(tasks);
 });
 
 // ============ ROOT ============
