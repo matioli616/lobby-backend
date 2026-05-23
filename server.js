@@ -156,6 +156,34 @@ for (const [name, type, startDate, endDate, priceMultiplier] of seasonSeeds) {
   put('seasons', { id: randomUUID(), hotelId: HOTEL_ID, name, type, startDate, endDate, priceMultiplier, createdAt: new Date().toISOString() });
 }
 
+// Seed: hospedagens concluídas + invoices para relatórios demo
+const D = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString();
+const completedStays = [
+  // [roomKey, guestIdx, checkinDaysAgo, checkoutDaysAgo, nights, rate, payMethod]
+  ['101', 0, 18, 15, 3, 150, 'pix'],
+  ['102', 1,  5,  2, 3, 150, 'credit'],
+  ['301', 2, 25, 20, 5, 450, 'credit'],
+  ['302', 0, 12,  9, 3, 450, 'debit'],
+  ['401', 1, 30, 27, 3, 150, 'cash'],
+  ['402', 2,  8,  6, 2, 250, 'pix'],
+  ['103', 0, 40, 37, 3, 150, 'credit'],
+  ['501', 1, 45, 40, 5, 500, 'credit'],
+];
+const guestIds = Array.from(DB.guests.values()).map(g => g.id);
+for (const [roomKey, gIdx, cin, cout, nights, rate, pay] of completedStays) {
+  const sid = randomUUID();
+  const guestId = guestIds[gIdx] || guestIds[0];
+  put('stays', {
+    id: sid, hotelId: HOTEL_ID, guestId, roomId: roomIds[roomKey],
+    numberOfNights: nights, dailyRate: rate,
+    checkinTime: D(cin), checkoutTime: D(cout), extras: 0, paymentMethod: pay,
+  });
+  put('invoices', {
+    id: randomUUID(), hotelId: HOTEL_ID, stayId: sid,
+    total: nights * rate, paymentMethod: pay, status: 'paid', createdAt: D(cout),
+  });
+}
+
 // Seed: FNRH demo para hospedagem ativa do João
 put('fnrh_records', {
   id: randomUUID(), hotelId: HOTEL_ID, guestId: joaoId, stayId: activeStayId,
@@ -904,6 +932,235 @@ app.get('/api/hotels/:hotelId/tariff/calculate', verifyToken, enforceHotelOwners
 });
 
 
+
+// ============ ROUTES: RELATÓRIOS ============
+
+// Helpers de data para os relatórios
+function dateRange(from, to) {
+  const dates = [], cur = new Date(from + 'T12:00:00'), end = new Date(to + 'T12:00:00');
+  while (cur <= end) { dates.push(cur.toISOString().split('T')[0]); cur.setDate(cur.getDate() + 1); }
+  return dates;
+}
+function prevPeriod(from, to) {
+  const f = new Date(from + 'T12:00:00'), t = new Date(to + 'T12:00:00');
+  const days = Math.round((t - f) / 86400000);
+  const pTo = new Date(f - 86400000), pFrom = new Date(pTo - days * 86400000);
+  return { from: pFrom.toISOString().split('T')[0], to: pTo.toISOString().split('T')[0] };
+}
+function parseReportParams(req, res) {
+  const { from, to } = req.query;
+  if (!from || !to) { res.status(400).json({ error: 'from e to são obrigatórios (YYYY-MM-DD)', code: 'MISSING_PARAMS' }); return null; }
+  if (from > to)    { res.status(400).json({ error: 'from deve ser anterior a to', code: 'INVALID_RANGE' }); return null; }
+  return { from, to };
+}
+// Conta room-nights ocupadas num período
+// SQL equiv: SELECT COUNT(*) FROM stays WHERE hotelId=? AND DATE(checkinTime)<=:day AND (checkoutTime IS NULL OR DATE(checkoutTime)>:day) GROUP BY day
+function occupiedRoomNightsInPeriod(hotelId, from, to) {
+  const stays = find('stays', s => s.hotelId === hotelId);
+  const dates = dateRange(from, to);
+  let total = 0;
+  const byDay = dates.map(date => {
+    const occ = stays.filter(s => {
+      const cin  = s.checkinTime.split('T')[0];
+      const cout = s.checkoutTime ? s.checkoutTime.split('T')[0] : '9999-12-31';
+      return cin <= date && cout > date;
+    }).length;
+    total += occ;
+    return { date, occupiedRooms: occ };
+  });
+  return { total, byDay };
+}
+
+// Relatório de ocupação
+app.get('/api/hotels/:hotelId/reports/occupancy', verifyToken, enforceHotelOwnership, (req, res) => {
+  const p = parseReportParams(req, res); if (!p) return;
+  const { hotelId } = req.params;
+  const rooms = find('rooms', r => r.hotelId === hotelId);
+  const totalRooms = rooms.length;
+  const dates = dateRange(p.from, p.to);
+  const totalDaysInPeriod = dates.length;
+
+  const { total: occupiedRoomNights, byDay } = occupiedRoomNightsInPeriod(hotelId, p.from, p.to);
+  const availableRoomNights = totalRooms * totalDaysInPeriod;
+  const occupancyRate = availableRoomNights > 0
+    ? parseFloat((occupiedRoomNights / availableRoomNights * 100).toFixed(2)) : 0;
+
+  const prev = prevPeriod(p.from, p.to);
+  const { total: prevOcc } = occupiedRoomNightsInPeriod(hotelId, prev.from, prev.to);
+  const prevRate = availableRoomNights > 0 ? parseFloat((prevOcc / availableRoomNights * 100).toFixed(2)) : 0;
+
+  res.json({
+    period: p, totalRooms, totalDaysInPeriod,
+    occupiedRoomNights, availableRoomNights, occupancyRate,
+    byDay: byDay.map(d => ({
+      ...d, availableRooms: totalRooms,
+      rate: totalRooms > 0 ? parseFloat((d.occupiedRooms / totalRooms * 100).toFixed(1)) : 0,
+    })),
+    comparison: { previousPeriodRate: prevRate, change: parseFloat((occupancyRate - prevRate).toFixed(2)) },
+  });
+});
+
+// Relatório de receita
+// SQL equiv: SELECT SUM(total), paymentMethod, DATE(createdAt) FROM invoices WHERE hotelId=? AND status='paid' AND createdAt BETWEEN ? AND ? GROUP BY paymentMethod, DATE(createdAt)
+app.get('/api/hotels/:hotelId/reports/revenue', verifyToken, enforceHotelOwnership, (req, res) => {
+  const p = parseReportParams(req, res); if (!p) return;
+  const { hotelId } = req.params;
+
+  const invoices = find('invoices', i =>
+    i.hotelId === hotelId && i.status === 'paid' &&
+    i.createdAt.split('T')[0] >= p.from && i.createdAt.split('T')[0] <= p.to
+  );
+  const totalRevenue = invoices.reduce((s, i) => s + i.total, 0);
+
+  // Agrupa por forma de pagamento
+  const byPaymentMethod = {};
+  for (const inv of invoices)
+    byPaymentMethod[inv.paymentMethod] = (byPaymentMethod[inv.paymentMethod] || 0) + inv.total;
+
+  // Agrupa por tipo de quarto (join stays → rooms)
+  const byRoomType = {};
+  for (const inv of invoices) {
+    const stay = DB.stays.get(inv.stayId);
+    const type = stay ? (DB.rooms.get(stay.roomId)?.roomType || 'outros') : 'outros';
+    byRoomType[type] = (byRoomType[type] || 0) + inv.total;
+  }
+
+  // Agrupa por dia
+  const byDayMap = {};
+  for (const inv of invoices) {
+    const day = inv.createdAt.split('T')[0];
+    byDayMap[day] = (byDayMap[day] || 0) + inv.total;
+  }
+  const byDay = Object.entries(byDayMap).sort().map(([date, revenue]) => ({ date, revenue: parseFloat(revenue.toFixed(2)) }));
+
+  const rooms = find('rooms', r => r.hotelId === hotelId);
+  const dates = dateRange(p.from, p.to);
+  const { total: occNights } = occupiedRoomNightsInPeriod(hotelId, p.from, p.to);
+  const ADR    = occNights > 0   ? parseFloat((totalRevenue / occNights).toFixed(2)) : 0;
+  const revPAR = rooms.length > 0 ? parseFloat((totalRevenue / (rooms.length * dates.length)).toFixed(2)) : 0;
+
+  res.json({
+    period: p,
+    totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+    byPaymentMethod: Object.fromEntries(Object.entries(byPaymentMethod).map(([k,v]) => [k, parseFloat(v.toFixed(2))])),
+    byRoomType:      Object.fromEntries(Object.entries(byRoomType).map(([k,v])      => [k, parseFloat(v.toFixed(2))])),
+    byDay, averageDailyRate: ADR, revPAR,
+  });
+});
+
+// Relatório de hóspedes
+// SQL equiv: JOIN fnrh_records GROUP BY nationality, addressState, purpose + age bucket CASE
+app.get('/api/hotels/:hotelId/reports/guests', verifyToken, enforceHotelOwnership, (req, res) => {
+  const p = parseReportParams(req, res); if (!p) return;
+  const { hotelId } = req.params;
+
+  const stays = find('stays', s =>
+    s.hotelId === hotelId &&
+    s.checkinTime.split('T')[0] >= p.from && s.checkinTime.split('T')[0] <= p.to
+  );
+  const guestIdSet = new Set(stays.map(s => s.guestId));
+  const totalGuests = guestIdSet.size;
+
+  const fnrhs = find('fnrh_records', r =>
+    r.hotelId === hotelId && r.arrivalDate >= p.from && r.arrivalDate <= p.to
+  );
+
+  const byNationality = {}, byOriginState = {}, byPurpose = {};
+  const ageRanges = {'<18':0,'18-25':0,'26-35':0,'36-45':0,'46-55':0,'56-65':0,'>65':0};
+
+  for (const f of fnrhs) {
+    const nat = f.nationality || 'Não informado';
+    byNationality[nat] = (byNationality[nat] || 0) + 1;
+    if (f.addressState) byOriginState[f.addressState] = (byOriginState[f.addressState] || 0) + 1;
+    if (f.purpose)      byPurpose[f.purpose]          = (byPurpose[f.purpose]          || 0) + 1;
+    if (f.birthDate) {
+      const age = Math.floor((Date.now() - new Date(f.birthDate)) / (365.25 * 86400000));
+      if      (age < 18)  ageRanges['<18']++;
+      else if (age <= 25) ageRanges['18-25']++;
+      else if (age <= 35) ageRanges['26-35']++;
+      else if (age <= 45) ageRanges['36-45']++;
+      else if (age <= 55) ageRanges['46-55']++;
+      else if (age <= 65) ageRanges['56-65']++;
+      else                ageRanges['>65']++;
+    }
+  }
+
+  const avgDuration = stays.length > 0
+    ? parseFloat((stays.reduce((s, st) => s + st.numberOfNights, 0) / stays.length).toFixed(1)) : 0;
+  const vipGuests = find('guests', g => g.hotelId === hotelId && guestIdSet.has(g.id) && (g.vipScore || 0) > 50).length;
+
+  res.json({ period: p, totalGuests, byNationality, byOriginState, byAgeRange: ageRanges, byPurpose, averageStayDuration: avgDuration, vipGuests });
+});
+
+// Relatório de performance das faxineiras
+// SQL equiv: SELECT assignedTo, COUNT(*), AVG(actualMinutes), AVG(score), SUM(passed)/COUNT(*) FROM cleaning_tasks LEFT JOIN cleaning_inspections GROUP BY assignedTo
+app.get('/api/hotels/:hotelId/reports/staff-performance', verifyToken, enforceHotelOwnership, (req, res) => {
+  const p = parseReportParams(req, res); if (!p) return;
+  const { hotelId } = req.params;
+
+  const staff = find('cleaning_staff', s => s.hotelId === hotelId);
+  const result = staff.map(s => {
+    const tasks = find('cleaning_tasks', t =>
+      t.assignedTo === s.id &&
+      ['done','inspected','inspection_failed'].includes(t.status) &&
+      t.completedAt && t.completedAt.split('T')[0] >= p.from &&
+      t.completedAt.split('T')[0] <= p.to
+    );
+    const tasksCompleted = tasks.length;
+    const avgMin = tasksCompleted > 0
+      ? parseFloat((tasks.filter(t => t.actualMinutes).reduce((sum, t) => sum + t.actualMinutes, 0) / tasksCompleted).toFixed(1)) : 0;
+    const taskIds = new Set(tasks.map(t => t.id));
+    const inspections = find('cleaning_inspections', i => taskIds.has(i.taskId));
+    const totalInsp = inspections.length;
+    const avgScore  = totalInsp > 0 ? parseFloat((inspections.reduce((s, i) => s + (i.score || 0), 0) / totalInsp).toFixed(1)) : null;
+    const passRate  = totalInsp > 0 ? parseFloat((inspections.filter(i => i.passed).length / totalInsp * 100).toFixed(1)) : null;
+    return { id: s.id, name: s.name, tasksCompleted, averageMinutes: avgMin, inspectionScore: avgScore, passRate };
+  });
+
+  res.json({ period: p, staff: result });
+});
+
+// Relatório financeiro consolidado
+// SQL equiv: combina SUM(invoices) + ocupação calculada + métricas KPI hoteleiras (ADR, RevPAR)
+app.get('/api/hotels/:hotelId/reports/financial', verifyToken, enforceHotelOwnership, (req, res) => {
+  const p = parseReportParams(req, res); if (!p) return;
+  const { hotelId } = req.params;
+
+  const invoices = find('invoices', i =>
+    i.hotelId === hotelId && i.status === 'paid' &&
+    i.createdAt.split('T')[0] >= p.from && i.createdAt.split('T')[0] <= p.to
+  );
+  const revenue   = parseFloat(invoices.reduce((s, i) => s + i.total, 0).toFixed(2));
+  const avgTicket = invoices.length > 0 ? parseFloat((revenue / invoices.length).toFixed(2)) : 0;
+
+  const rooms = find('rooms', r => r.hotelId === hotelId);
+  const dates = dateRange(p.from, p.to);
+  const { total: occNights } = occupiedRoomNightsInPeriod(hotelId, p.from, p.to);
+  const availNights = rooms.length * dates.length;
+  const occRate = availNights > 0 ? parseFloat((occNights / availNights * 100).toFixed(2)) : 0;
+  const ADR     = occNights > 0   ? parseFloat((revenue / occNights).toFixed(2)) : 0;
+  const revPAR  = availNights > 0 ? parseFloat((revenue / availNights).toFixed(2)) : 0;
+
+  const prev = prevPeriod(p.from, p.to);
+  const prevInv = find('invoices', i =>
+    i.hotelId === hotelId && i.status === 'paid' &&
+    i.createdAt.split('T')[0] >= prev.from && i.createdAt.split('T')[0] <= prev.to
+  );
+  const prevRevenue = parseFloat(prevInv.reduce((s, i) => s + i.total, 0).toFixed(2));
+  const { total: prevOcc } = occupiedRoomNightsInPeriod(hotelId, prev.from, prev.to);
+  const prevOccRate = availNights > 0 ? parseFloat((prevOcc / availNights * 100).toFixed(2)) : 0;
+
+  res.json({
+    period: p, revenue, expenses: 0, profit: revenue,
+    averageTicket: avgTicket, occupancyRate: occRate, ADR, revPAR,
+    comparison: {
+      previousPeriod:  prev, previousRevenue: prevRevenue,
+      revenueChange:   parseFloat((revenue - prevRevenue).toFixed(2)),
+      previousOccRate: prevOccRate,
+      occupancyChange: parseFloat((occRate - prevOccRate).toFixed(2)),
+    },
+  });
+});
 
 // Cria registro FNRH
 app.post('/api/hotels/:hotelId/fnrh', verifyToken, enforceHotelOwnership, (req, res) => {
