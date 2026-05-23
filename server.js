@@ -56,6 +56,9 @@ const DB = {
   cleaning_inspections:new Map(),
   // Módulo FNRH
   fnrh_records:        new Map(),
+  // Módulo Tarifário
+  seasons:             new Map(),
+  hotels:              new Map(),
 };
 
 const find    = (table, fn) => Array.from(DB[table].values()).filter(fn);
@@ -134,6 +137,23 @@ for (const [roomId, assignedTo, status, priority, estimatedMinutes] of taskSeeds
     inspectedAt: null, inspectedBy: null,
     createdAt: new Date().toISOString(),
   });
+}
+
+// Seed: hotel demo com multiplicadores por dia da semana
+put('hotels', {
+  id: HOTEL_ID, name: 'Hotel Demo LOBBY',
+  weekdayMultipliers: { '0':1.0,'1':1.0,'2':1.0,'3':1.0,'4':1.0,'5':1.2,'6':1.3 },
+});
+
+// Seed: temporadas demo
+const seasonSeeds = [
+  ['Réveillon',         'peak',    '2026-12-26', '2027-01-02', 2.50],
+  ['Carnaval 2027',     'peak',    '2027-02-26', '2027-03-05', 2.20],
+  ['Alta Temporada',    'high',    '2026-12-01', '2027-02-28', 1.50],
+  ['Baixa Temporada',   'low',     '2026-04-01', '2026-06-30', 0.80],
+];
+for (const [name, type, startDate, endDate, priceMultiplier] of seasonSeeds) {
+  put('seasons', { id: randomUUID(), hotelId: HOTEL_ID, name, type, startDate, endDate, priceMultiplier, createdAt: new Date().toISOString() });
 }
 
 // Seed: FNRH demo para hospedagem ativa do João
@@ -235,6 +255,25 @@ const InspectTaskSchema = z.object({
 const StaffLoginSchema = z.object({
   staffId: z.string().uuid(),
   pin:     z.string().regex(/^\d{4,6}$/),
+});
+
+// Schemas: Tarifário
+const SeasonSchema = z.object({
+  name:            z.string().min(2).max(100),
+  type:            z.enum(['low','regular','high','peak']),
+  startDate:       z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  endDate:         z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  priceMultiplier: z.number().min(0.5).max(3.0),
+}).refine(d => d.endDate > d.startDate, { message: 'endDate deve ser após startDate', path: ['endDate'] });
+
+const WeekdaySchema = z.object({
+  '0': z.number().min(0.5).max(3.0),
+  '1': z.number().min(0.5).max(3.0),
+  '2': z.number().min(0.5).max(3.0),
+  '3': z.number().min(0.5).max(3.0),
+  '4': z.number().min(0.5).max(3.0),
+  '5': z.number().min(0.5).max(3.0),
+  '6': z.number().min(0.5).max(3.0),
 });
 
 // Schema FNRH — validações cruzadas via superRefine
@@ -707,7 +746,164 @@ app.get('/api/cleaning/my-tasks', verifyStaffToken, (req, res) => {
   res.json(tasks);
 });
 
-// ============ ROUTES: FNRH ============
+// ============ ROUTES: TARIFÁRIO DINÂMICO ============
+
+// Lista temporadas do hotel
+app.get('/api/hotels/:hotelId/seasons', verifyToken, enforceHotelOwnership, (req, res) => {
+  const seasons = find('seasons', s => s.hotelId === req.params.hotelId)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+  res.json(seasons);
+});
+
+// Cria temporada
+app.post('/api/hotels/:hotelId/seasons', verifyToken, enforceHotelOwnership, (req, res) => {
+  try {
+    const data = SeasonSchema.parse(req.body);
+    const { hotelId } = req.params;
+
+    // Verifica sobreposição de datas no mesmo tipo
+    const overlap = findOne('seasons', s =>
+      s.hotelId === hotelId && s.type === data.type &&
+      s.startDate < data.endDate && s.endDate > data.startDate
+    );
+    if (overlap)
+      return res.status(409).json({ error: `Sobreposição com temporada "${overlap.name}"`, code: 'DATE_OVERLAP' });
+
+    const season = put('seasons', { id: randomUUID(), hotelId, ...data, createdAt: new Date().toISOString() });
+    res.status(201).json(season);
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
+    res.status(500).json({ error: 'Erro ao criar temporada', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Atualiza temporada
+app.put('/api/hotels/:hotelId/seasons/:seasonId', verifyToken, enforceHotelOwnership, (req, res) => {
+  try {
+    const season = DB.seasons.get(req.params.seasonId);
+    if (!season || season.hotelId !== req.params.hotelId)
+      return res.status(404).json({ error: 'Temporada não encontrada', code: 'NOT_FOUND' });
+
+    const updates = SeasonSchema.partial().parse(req.body);
+    const merged  = { ...season, ...updates };
+
+    // Revalida datas se alteradas
+    if (merged.endDate <= merged.startDate)
+      return res.status(400).json({ error: 'endDate deve ser após startDate', code: 'VALIDATION_ERROR' });
+
+    // Verifica sobreposição ignorando a própria temporada
+    const overlap = findOne('seasons', s =>
+      s.hotelId === req.params.hotelId && s.type === merged.type &&
+      s.id !== season.id &&
+      s.startDate < merged.endDate && s.endDate > merged.startDate
+    );
+    if (overlap)
+      return res.status(409).json({ error: `Sobreposição com temporada "${overlap.name}"`, code: 'DATE_OVERLAP' });
+
+    Object.assign(season, updates);
+    res.json(season);
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
+    res.status(500).json({ error: 'Erro ao atualizar temporada', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Remove temporada
+app.delete('/api/hotels/:hotelId/seasons/:seasonId', verifyToken, enforceHotelOwnership, (req, res) => {
+  const season = DB.seasons.get(req.params.seasonId);
+  if (!season || season.hotelId !== req.params.hotelId)
+    return res.status(404).json({ error: 'Temporada não encontrada', code: 'NOT_FOUND' });
+  DB.seasons.delete(req.params.seasonId);
+  res.json({ success: true });
+});
+
+// Lê multiplicadores por dia da semana
+app.get('/api/hotels/:hotelId/weekday-multipliers', verifyToken, enforceHotelOwnership, (req, res) => {
+  const hotel = DB.hotels.get(req.params.hotelId);
+  if (!hotel) return res.status(404).json({ error: 'Hotel não encontrado', code: 'NOT_FOUND' });
+  res.json(hotel.weekdayMultipliers);
+});
+
+// Atualiza multiplicadores por dia da semana
+app.put('/api/hotels/:hotelId/weekday-multipliers', verifyToken, enforceHotelOwnership, (req, res) => {
+  try {
+    const hotel = DB.hotels.get(req.params.hotelId);
+    if (!hotel) return res.status(404).json({ error: 'Hotel não encontrado', code: 'NOT_FOUND' });
+    hotel.weekdayMultipliers = WeekdaySchema.parse(req.body);
+    res.json(hotel.weekdayMultipliers);
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
+    res.status(500).json({ error: 'Erro ao salvar multiplicadores', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Calcula tarifa detalhada por período
+app.get('/api/hotels/:hotelId/tariff/calculate', verifyToken, enforceHotelOwnership, (req, res) => {
+  const { hotelId } = req.params;
+  const { roomId, checkin, checkout } = req.query;
+
+  if (!roomId || !checkin || !checkout)
+    return res.status(400).json({ error: 'roomId, checkin e checkout são obrigatórios', code: 'MISSING_PARAMS' });
+
+  const room = DB.rooms.get(roomId);
+  if (!room || room.hotelId !== hotelId)
+    return res.status(404).json({ error: 'Quarto não encontrado', code: 'NOT_FOUND' });
+
+  const checkinDate  = new Date(checkin  + 'T12:00:00');
+  const checkoutDate = new Date(checkout + 'T12:00:00');
+  if (isNaN(checkinDate) || isNaN(checkoutDate) || checkinDate >= checkoutDate)
+    return res.status(400).json({ error: 'Datas inválidas', code: 'INVALID_DATES' });
+
+  const hotel    = DB.hotels.get(hotelId);
+  const wdMult   = hotel?.weekdayMultipliers || { '0':1,'1':1,'2':1,'3':1,'4':1,'5':1,'6':1 };
+  const seasons  = find('seasons', s => s.hotelId === hotelId);
+  const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const basePrice = parseFloat(room.dailyRate);
+
+  const breakdown = [];
+  let totalPrice  = 0;
+  const current   = new Date(checkinDate);
+
+  while (current < checkoutDate) {
+    const dateStr = current.toISOString().split('T')[0];
+    const dow     = current.getDay(); // 0=domingo
+
+    // Busca a temporada mais específica (maior priceMultiplier) que cobre este dia
+    const activeSeason = seasons
+      .filter(s => dateStr >= s.startDate && dateStr <= s.endDate)
+      .sort((a, b) => b.priceMultiplier - a.priceMultiplier)[0] || null;
+
+    const seasonMultiplier  = activeSeason ? parseFloat(activeSeason.priceMultiplier) : 1.0;
+    const weekdayMultiplier = parseFloat(wdMult[String(dow)] ?? 1.0);
+    const finalPrice        = parseFloat((basePrice * seasonMultiplier * weekdayMultiplier).toFixed(2));
+
+    breakdown.push({
+      date:              dateStr,
+      dayOfWeek:         DAY_NAMES[dow],
+      season:            activeSeason?.name || null,
+      seasonType:        activeSeason?.type || null,
+      seasonMultiplier,
+      weekdayMultiplier,
+      finalPrice,
+    });
+
+    totalPrice += finalPrice;
+    current.setDate(current.getDate() + 1);
+  }
+
+  const totalNights = breakdown.length;
+  res.json({
+    roomNumber:       room.roomNumber,
+    roomType:         room.roomType,
+    basePrice,
+    totalNights,
+    breakdown,
+    totalPrice:        parseFloat(totalPrice.toFixed(2)),
+    averageNightPrice: parseFloat((totalPrice / totalNights).toFixed(2)),
+  });
+});
+
+
 
 // Cria registro FNRH
 app.post('/api/hotels/:hotelId/fnrh', verifyToken, enforceHotelOwnership, (req, res) => {
