@@ -272,7 +272,7 @@ const VALID_UFS = new Set([
 // ============ VALIDATION SCHEMAS ============
 const LoginSchema = z.object({ email: z.string().email(), password: z.string().min(6) });
 const GuestSchema = z.object({
-  cpf: z.string().regex(/^\d{11}$/),
+  cpf: z.string().regex(/^\d{11}$/).refine(validateCPFDoc, 'CPF inválido'),
   name: z.string().min(3).max(120),
   email: z.string().email().optional().nullable(),
   phone: z.string().optional().nullable()
@@ -322,13 +322,19 @@ function isCalendarDate(str) {
 }
 
 // Schemas: Tarifário
-const SeasonSchema = z.object({
+// SeasonSchemaBase é um ZodObject puro — necessário para suportar .partial() no PUT
+const SeasonSchemaBase = z.object({
   name:            z.string().min(2).max(100),
   type:            z.enum(['low','regular','high','peak']),
   startDate:       z.string().refine(isCalendarDate, 'startDate inválida (use YYYY-MM-DD)'),
   endDate:         z.string().refine(isCalendarDate, 'endDate inválida (use YYYY-MM-DD)'),
   priceMultiplier: z.number().min(0.5).max(3.0),
-}).refine(d => d.endDate > d.startDate, { message: 'endDate deve ser após startDate', path: ['endDate'] });
+});
+// SeasonSchema adiciona a validação cruzada das datas (usada apenas na criação)
+const SeasonSchema = SeasonSchemaBase.refine(
+  d => d.endDate > d.startDate,
+  { message: 'endDate deve ser após startDate', path: ['endDate'] }
+);
 
 const WeekdaySchema = z.object({
   '0': z.number().min(0.5).max(3.0),
@@ -490,15 +496,26 @@ app.get('/api/hotels/:hotelId/dashboard/stats', verifyToken, enforceHotelOwnersh
   const stays    = find('stays',    s => s.hotelId === hotelId);
   const invoices = find('invoices', i => i.hotelId === hotelId && i.status === 'paid');
 
+  const totalRooms     = rooms.length;
+  const occupiedRooms  = rooms.filter(r => r.status === 'occupied').length;
+  const cleaningRooms  = rooms.filter(r => r.status === 'cleaning').length;
+  const availableRooms = rooms.filter(r => r.status === 'available').length;
+  const occupancyRate  = totalRooms > 0 ? parseFloat((occupiedRooms / totalRooms * 100).toFixed(1)) : 0;
+
+  const revenueThisMonth = invoices.filter(i => new Date(i.createdAt) >= thirtyDaysAgo).reduce((s, i) => s + i.total, 0);
+  const revenueToday     = invoices.filter(i => new Date(i.createdAt).toDateString() === today).reduce((s, i) => s + i.total, 0);
+  const revPAR = totalRooms > 0 ? parseFloat((revenueThisMonth / (totalRooms * 30)).toFixed(2)) : 0;
+
   res.json({
-    totalrooms:      rooms.length,
-    occupiedrooms:   rooms.filter(r => r.status === 'occupied').length,
-    activestays:     stays.filter(s => !s.checkoutTime).length,
-    totalguests:     guests.length,
-    arrivalstoday:   stays.filter(s => new Date(s.checkinTime).toDateString() === today).length,
-    departurestoday: stays.filter(s => s.checkoutTime && new Date(s.checkoutTime).toDateString() === today).length,
-    revenuetoday:    invoices.filter(i => new Date(i.createdAt).toDateString() === today).reduce((s, i) => s + i.total, 0),
-    revenuemonth:    invoices.filter(i => new Date(i.createdAt) >= thirtyDaysAgo).reduce((s, i) => s + i.total, 0),
+    totalRooms, occupiedRooms, availableRooms, cleaningRooms,
+    occupancyRate,
+    activeStays:     stays.filter(s => !s.checkoutTime).length,
+    totalGuests:     guests.length,
+    checkinsToday:   stays.filter(s => new Date(s.checkinTime).toDateString() === today).length,
+    checkoutsToday:  stays.filter(s => s.checkoutTime && new Date(s.checkoutTime).toDateString() === today).length,
+    revenueToday,
+    revenueThisMonth,
+    revPAR,
   });
 });
 
@@ -922,7 +939,7 @@ app.put('/api/hotels/:hotelId/seasons/:seasonId', verifyToken, enforceHotelOwner
     if (!season || season.hotelId !== req.params.hotelId)
       return res.status(404).json({ error: 'Temporada não encontrada', code: 'NOT_FOUND' });
 
-    const updates = SeasonSchema.partial().parse(req.body);
+    const updates = SeasonSchemaBase.partial().parse(req.body);
     const merged  = { ...season, ...updates };
 
     // Revalida datas se alteradas
@@ -1036,8 +1053,8 @@ app.get('/api/hotels/:hotelId/tariff/calculate', verifyToken, enforceHotelOwners
     basePrice,
     totalNights,
     breakdown,
-    totalPrice:        parseFloat(totalPrice.toFixed(2)),
-    averageNightPrice: parseFloat((totalPrice / totalNights).toFixed(2)),
+    totalPrice:       parseFloat(totalPrice.toFixed(2)),
+    averageDailyRate: parseFloat((totalPrice / totalNights).toFixed(2)),
   });
 });
 
@@ -1058,9 +1075,11 @@ function prevPeriod(from, to) {
   return { from: pFrom.toISOString().split('T')[0], to: pTo.toISOString().split('T')[0] };
 }
 function parseReportParams(req, res) {
-  const { from, to } = req.query;
-  if (!from || !to) { res.status(400).json({ error: 'from e to são obrigatórios (YYYY-MM-DD)', code: 'MISSING_PARAMS' }); return null; }
-  if (from > to)    { res.status(400).json({ error: 'from deve ser anterior a to', code: 'INVALID_RANGE' }); return null; }
+  const toDefault   = new Date().toISOString().split('T')[0];
+  const fromDefault = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
+  const from = req.query.from || fromDefault;
+  const to   = req.query.to   || toDefault;
+  if (from > to) { res.status(400).json({ error: 'from deve ser anterior a to', code: 'INVALID_RANGE' }); return null; }
   return { from, to };
 }
 // Conta room-nights ocupadas num período
@@ -1101,7 +1120,8 @@ app.get('/api/hotels/:hotelId/reports/occupancy', verifyToken, enforceHotelOwner
 
   res.json({
     period: p, totalRooms, totalDaysInPeriod,
-    occupiedRoomNights, availableRoomNights, occupancyRate,
+    occupiedRoomNights, availableRoomNights,
+    occupancyRate, averageOccupancy: occupancyRate,
     byDay: byDay.map(d => ({
       ...d, availableRooms: totalRooms,
       rate: totalRooms > 0 ? parseFloat((d.occupiedRooms / totalRooms * 100).toFixed(1)) : 0,
