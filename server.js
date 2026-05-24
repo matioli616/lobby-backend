@@ -2,20 +2,39 @@ require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const cors = require('cors');
 const { randomUUID } = require('crypto');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'lobby-demo-secret-2026';
 const NODE_ENV = process.env.NODE_ENV || 'development';
+const JWT_SECRET = process.env.JWT_SECRET || (
+  NODE_ENV === 'production'
+    ? (() => { throw new Error('JWT_SECRET não definido — obrigatório em produção'); })()
+    : 'lobby-demo-secret-2026'
+);
 
 const app = express();
 app.set('trust proxy', 1);
 
 // ============ SECURITY MIDDLEWARE ============
-app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc:  ["'self'"],
+      scriptSrc:   ["'self'"],
+      styleSrc:    ["'self'", "'unsafe-inline'"], // necessário para estilos inline do SPA
+      imgSrc:      ["'self'", 'data:'],
+      connectSrc:  ["'self'"],
+      fontSrc:     ["'self'"],
+      objectSrc:   ["'none'"],
+      frameSrc:    ["'none'"],
+    },
+  },
+  crossOriginResourcePolicy: { policy: 'same-origin' },
+}));
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:10000')
   .split(',').map(o => o.trim());
@@ -68,8 +87,11 @@ const put     = (table, obj) => { DB[table].set(obj.id, obj); return obj; };
 // ============ SEED DATA ============
 const HOTEL_ID = 'a1b2c3d4-e5f6-4890-a123-456789abcdef';
 const USER_ID  = 'b1c2d3e4-f5a6-4890-b456-789abcdef012';
+const BCRYPT_ROUNDS = 10;
 
-put('users', { id: USER_ID, hotelId: HOTEL_ID, name: 'Admin Demo', email: 'admin@demo.com', password: 'demo123' });
+async function seedDatabase() {
+const adminPwHash = await bcrypt.hash('demo123', BCRYPT_ROUNDS);
+put('users', { id: USER_ID, hotelId: HOTEL_ID, name: 'Admin Demo', email: 'admin@demo.com', password: adminPwHash });
 
 const roomDefs = [
   ['101','standard',2,150], ['102','standard',2,150], ['103','standard',2,150],
@@ -117,7 +139,8 @@ const staffIds = [];
 for (const [name, phone, pin] of staffDefs) {
   const id = randomUUID();
   staffIds.push(id);
-  put('cleaning_staff', { id, hotelId: HOTEL_ID, name, phone, pin, isActive: true, createdAt: new Date().toISOString() });
+  const pinHash = await bcrypt.hash(pin, BCRYPT_ROUNDS);
+  put('cleaning_staff', { id, hotelId: HOTEL_ID, name, phone, pin: pinHash, isActive: true, createdAt: new Date().toISOString() });
 }
 
 // Seed: tarefas demo para quartos disponíveis
@@ -204,6 +227,7 @@ put('fnrh_records', {
 });
 
 console.log('✅ Demo database pronto — login: admin@demo.com / demo123');
+} // fim seedDatabase
 
 // ============ HEALTH CHECK ============
 app.get('/health', (req, res) => {
@@ -254,7 +278,7 @@ const StaySchema = z.object({
   guestId: z.string().uuid(),
   roomId: z.string().uuid(),
   numberOfNights: z.number().min(1).max(365),
-  dailyRate: z.number().min(0)
+  // dailyRate vem do servidor (room.dailyRate), nunca do cliente
 });
 
 // Schemas: Governança
@@ -285,12 +309,21 @@ const StaffLoginSchema = z.object({
   pin:     z.string().regex(/^\d{4,6}$/),
 });
 
+// Valida que a string YYYY-MM-DD é uma data de calendário real (ano 2000-2100)
+function isCalendarDate(str) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
+  const d = new Date(str + 'T12:00:00');
+  if (isNaN(d) || d.toISOString().slice(0, 10) !== str) return false;
+  const year = d.getFullYear();
+  return year >= 2000 && year <= 2100;
+}
+
 // Schemas: Tarifário
 const SeasonSchema = z.object({
   name:            z.string().min(2).max(100),
   type:            z.enum(['low','regular','high','peak']),
-  startDate:       z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  endDate:         z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  startDate:       z.string().refine(isCalendarDate, 'startDate inválida (use YYYY-MM-DD)'),
+  endDate:         z.string().refine(isCalendarDate, 'endDate inválida (use YYYY-MM-DD)'),
   priceMultiplier: z.number().min(0.5).max(3.0),
 }).refine(d => d.endDate > d.startDate, { message: 'endDate deve ser após startDate', path: ['endDate'] });
 
@@ -386,18 +419,58 @@ function verifyStaffToken(req, res, next) {
 }
 
 // ============ ROUTES: AUTH ============
-app.post('/api/auth/login', loginLimiter, (req, res) => {
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = LoginSchema.parse(req.body);
-    const user = findOne('users', u => u.email === email && u.password === password);
-    if (!user) return res.status(401).json({ error: 'Email ou senha inválidos', code: 'INVALID_CREDENTIALS' });
+    const user = findOne('users', u => u.email === email);
+    const valid = user && await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(401).json({ error: 'Email ou senha inválidos', code: 'INVALID_CREDENTIALS' });
     const token = jwt.sign({ id: user.id, email: user.email, hotelId: user.hotelId }, JWT_SECRET, { expiresIn: '8h' });
     const { password: _, ...safeUser } = user;
+    // Cookie httpOnly — inacessível a JS, mitiga XSS
+    res.cookie('lobby_token', token, {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: NODE_ENV === 'production',
+      maxAge: 8 * 60 * 60 * 1000, // 8h
+    });
     res.json({ token, user: safeUser });
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: 'Dados inválidos', code: 'VALIDATION_ERROR' });
     res.status(500).json({ error: 'Erro ao fazer login', code: 'INTERNAL_ERROR' });
   }
+});
+
+// Refresh: lê o cookie httpOnly e retorna token fresco para uso em memória
+// Permite que o SPA recupere a sessão após reload de página sem expor o token
+app.post('/api/auth/refresh', (req, res) => {
+  const raw = req.headers.cookie || '';
+  const match = raw.split(';').map(c => c.trim()).find(c => c.startsWith('lobby_token='));
+  if (!match) return res.status(401).json({ error: 'Sessão expirada', code: 'NO_COOKIE' });
+  const cookieToken = match.split('=')[1];
+  try {
+    const decoded = jwt.verify(cookieToken, JWT_SECRET);
+    const user = DB.users.get(decoded.id);
+    if (!user) return res.status(401).json({ error: 'Usuário não encontrado', code: 'USER_NOT_FOUND' });
+    // Emite novo token e renova o cookie
+    const newToken = jwt.sign({ id: user.id, email: user.email, hotelId: user.hotelId }, JWT_SECRET, { expiresIn: '8h' });
+    const { password: _, ...safeUser } = user;
+    res.cookie('lobby_token', newToken, {
+      httpOnly: true, sameSite: 'strict',
+      secure: NODE_ENV === 'production',
+      maxAge: 8 * 60 * 60 * 1000,
+    });
+    res.json({ token: newToken, user: safeUser });
+  } catch {
+    res.clearCookie('lobby_token');
+    res.status(401).json({ error: 'Sessão expirada', code: 'TOKEN_EXPIRED' });
+  }
+});
+
+// Logout: limpa o cookie httpOnly no servidor
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie('lobby_token');
+  res.json({ success: true });
 });
 
 // ============ ROUTES: DASHBOARD ============
@@ -456,11 +529,13 @@ app.get('/api/hotels/:hotelId/guests', verifyToken, enforceHotelOwnership, (req,
 // ============ ROUTES: STAYS ============
 app.post('/api/hotels/:hotelId/stays', verifyToken, enforceHotelOwnership, (req, res) => {
   try {
-    const { guestId, roomId, numberOfNights, dailyRate } = StaySchema.parse(req.body);
+    const { guestId, roomId, numberOfNights } = StaySchema.parse(req.body);
     const { hotelId } = req.params;
     const room = DB.rooms.get(roomId);
     if (!room || room.hotelId !== hotelId || room.status !== 'available')
       return res.status(400).json({ error: 'Quarto não disponível', code: 'ROOM_NOT_AVAILABLE' });
+
+    const dailyRate = room.dailyRate; // sempre do servidor, nunca do cliente
 
     const stay = put('stays', {
       id: randomUUID(), hotelId, guestId, roomId,
@@ -489,6 +564,10 @@ app.put('/api/stays/:stayId/checkout', verifyToken, (req, res) => {
   const { paymentMethod, paymentStatus } = req.body;
   const stay = DB.stays.get(stayId);
   if (!stay) return res.status(404).json({ error: 'Hospedagem não encontrada', code: 'NOT_FOUND' });
+  if (stay.hotelId !== req.user.hotelId)
+    return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
+  if (stay.checkoutTime)
+    return res.status(409).json({ error: 'Checkout já realizado', code: 'ALREADY_CHECKED_OUT' });
 
   stay.checkoutTime = new Date().toISOString();
   stay.paymentMethod = paymentMethod;
@@ -516,12 +595,13 @@ app.get('/api/hotels/:hotelId/cleaning/staff', verifyToken, enforceHotelOwnershi
 });
 
 // Cria nova faxineira
-app.post('/api/hotels/:hotelId/cleaning/staff', verifyToken, enforceHotelOwnership, (req, res) => {
+app.post('/api/hotels/:hotelId/cleaning/staff', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
     const { name, pin, phone } = CleaningStaffSchema.parse(req.body);
+    const pinHash = await bcrypt.hash(pin, BCRYPT_ROUNDS);
     const staff = put('cleaning_staff', {
       id: randomUUID(), hotelId: req.params.hotelId,
-      name, phone: phone || null, pin, isActive: true,
+      name, phone: phone || null, pin: pinHash, isActive: true,
       createdAt: new Date().toISOString(),
     });
     const { pin: _, ...out } = staff;
@@ -533,12 +613,14 @@ app.post('/api/hotels/:hotelId/cleaning/staff', verifyToken, enforceHotelOwnersh
 });
 
 // Atualiza faxineira
-app.put('/api/hotels/:hotelId/cleaning/staff/:staffId', verifyToken, enforceHotelOwnership, (req, res) => {
+app.put('/api/hotels/:hotelId/cleaning/staff/:staffId', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
     const staff = DB.cleaning_staff.get(req.params.staffId);
     if (!staff || staff.hotelId !== req.params.hotelId)
       return res.status(404).json({ error: 'Faxineira não encontrada', code: 'NOT_FOUND' });
     const updates = CleaningStaffSchema.partial().parse(req.body);
+    // Se o PIN foi alterado, hasheia antes de salvar
+    if (updates.pin) updates.pin = await bcrypt.hash(updates.pin, BCRYPT_ROUNDS);
     Object.assign(staff, updates);
     const { pin: _, ...out } = staff;
     res.json(out);
@@ -614,6 +696,8 @@ app.post('/api/hotels/:hotelId/cleaning/tasks', verifyToken, enforceHotelOwnersh
 app.put('/api/cleaning/tasks/:taskId/start', verifyToken, (req, res) => {
   const task = DB.cleaning_tasks.get(req.params.taskId);
   if (!task) return res.status(404).json({ error: 'Tarefa não encontrada', code: 'NOT_FOUND' });
+  if (task.hotelId !== req.user.hotelId)
+    return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
   if (task.status !== 'pending')
     return res.status(400).json({ error: 'Tarefa não está pendente', code: 'INVALID_STATUS' });
   task.status = 'in_progress';
@@ -629,6 +713,8 @@ app.put('/api/cleaning/tasks/:taskId/complete', verifyToken, (req, res) => {
   try {
     const task = DB.cleaning_tasks.get(req.params.taskId);
     if (!task) return res.status(404).json({ error: 'Tarefa não encontrada', code: 'NOT_FOUND' });
+    if (task.hotelId !== req.user.hotelId)
+      return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
     if (task.status !== 'in_progress')
       return res.status(400).json({ error: 'Tarefa não está em andamento', code: 'INVALID_STATUS' });
     const { actualMinutes, notes } = CompleteTaskSchema.parse(req.body);
@@ -653,6 +739,8 @@ app.put('/api/cleaning/tasks/:taskId/inspect', verifyToken, (req, res) => {
   try {
     const task = DB.cleaning_tasks.get(req.params.taskId);
     if (!task) return res.status(404).json({ error: 'Tarefa não encontrada', code: 'NOT_FOUND' });
+    if (task.hotelId !== req.user.hotelId)
+      return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
     if (task.status !== 'done')
       return res.status(400).json({ error: 'Tarefa ainda não concluída', code: 'INVALID_STATUS' });
     const { score, notes, passed } = InspectTaskSchema.parse(req.body);
@@ -740,11 +828,12 @@ app.post('/api/hotels/:hotelId/cleaning/tasks/generate-daily', verifyToken, enfo
 // ============ ROUTES: GOVERNANÇA — APP FAXINEIRA ============
 
 // Login da faxineira com staffId + PIN
-app.post('/api/cleaning/auth/login', loginLimiter, (req, res) => {
+app.post('/api/cleaning/auth/login', loginLimiter, async (req, res) => {
   try {
     const { staffId, pin } = StaffLoginSchema.parse(req.body);
     const staff = DB.cleaning_staff.get(staffId);
-    if (!staff || staff.pin !== pin || !staff.isActive)
+    const valid = staff && staff.isActive && await bcrypt.compare(pin, staff.pin);
+    if (!valid)
       return res.status(401).json({ error: 'PIN inválido ou conta inativa', code: 'INVALID_CREDENTIALS' });
     const token = jwt.sign(
       { id: staff.id, hotelId: staff.hotelId, name: staff.name, role: 'cleaning_staff' },
@@ -1172,6 +1261,9 @@ app.post('/api/hotels/:hotelId/fnrh', verifyToken, enforceHotelOwnership, (req, 
     const stay = DB.stays.get(data.stayId);
     if (!stay || stay.hotelId !== hotelId)
       return res.status(404).json({ error: 'Hospedagem não encontrada', code: 'NOT_FOUND' });
+    // Garante que guestId corresponde ao hóspede da hospedagem
+    if (stay.guestId !== data.guestId)
+      return res.status(422).json({ error: 'Hóspede não corresponde à hospedagem', code: 'GUEST_STAY_MISMATCH' });
 
     // Evita duplicata por stayId
     const existing = findOne('fnrh_records', r => r.stayId === data.stayId);
@@ -1285,8 +1377,10 @@ app.get('/api/status', (req, res) => res.json({ name: 'LOBBY Backend', status: '
 
 // ============ SERVER START ============
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`🚀 LOBBY Backend v2 rodando na porta ${PORT}`);
-  console.log(`📋 Modo: ${NODE_ENV} (in-memory demo)`);
-  console.log(`🌍 CORS permitido: ${ALLOWED_ORIGINS.join(', ')}`);
-});
+seedDatabase().then(() => {
+  app.listen(PORT, () => {
+    console.log(`🚀 LOBBY Backend v2 rodando na porta ${PORT}`);
+    console.log(`📋 Modo: ${NODE_ENV} (in-memory demo)`);
+    console.log(`🌍 CORS permitido: ${ALLOWED_ORIGINS.join(', ')}`);
+  });
+}).catch(err => { console.error('Erro ao inicializar seed:', err); process.exit(1); });

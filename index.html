@@ -575,7 +575,7 @@ async function login(email, password) {
     state.token = data.token;
     state.user = data.user;
     state.hotelId = data.user.hotelId;
-    sessionStorage.setItem('lobby_token', data.token);
+    // Só guarda dados não-sensíveis (user info sem token)
     sessionStorage.setItem('lobby_user', JSON.stringify(data.user));
     showApp();
     toast('Bem-vindo, ' + data.user.name, 'success');
@@ -588,7 +588,7 @@ async function login(email, password) {
 }
 
 function logout() {
-  sessionStorage.removeItem('lobby_token');
+  fetch('/api/auth/logout', { method: 'POST' }).catch(function(){}); // limpa cookie httpOnly
   sessionStorage.removeItem('lobby_user');
   state.token = null; state.user = null; state.hotelId = null;
   $('loginScreen').style.display = 'flex';
@@ -1163,50 +1163,117 @@ async function fetchFNRH() {
   } catch(e) { toast('Erro ao carregar FNRH: ' + e.message, 'error'); }
 }
 
+// Constrói um <select> sem injetar dados no innerHTML
+function buildSelect(id, options, current) {
+  var sel = document.getElementById(id);
+  if (!sel) return;
+  sel.innerHTML = '';
+  options.forEach(function(v) {
+    var o = document.createElement('option');
+    o.value = v;
+    o.textContent = v || '—';
+    if (v === current) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
 function openFNRHModal(rec) {
   rec = rec || {};
   $('fnrhModalTitle').textContent = rec.id ? 'Editar Registro FNRH' : 'Novo Registro FNRH';
-  var PURPOSES = ['','turismo','negocios','evento','saude','estudo','outro'];
+  var PURPOSES   = ['','turismo','negocios','evento','saude','estudo','outro'];
   var TRANSPORTS = ['','carro','onibus','aviao','trem','barco','outro'];
-  function opt(arr, cur) { return arr.map(function(v){return '<option value="'+v+'"'+(v===cur?' selected':'')+'>'+v+'</option>';}).join(''); }
-  $('fnrhModalBody').innerHTML = '<div class="form-row">'
-    + '<div class="form-group"><label class="form-label">Nome completo *</label><input type="text" class="form-input" id="ff-name" value="'+esc(rec.fullName)+'" maxlength="200"></div>'
-    + '<div class="form-group"><label class="form-label">Gênero</label><select class="form-select" id="ff-gender"><option value="">—</option><option value="M"'+(rec.gender==='M'?' selected':'')+'>M</option><option value="F"'+(rec.gender==='F'?' selected':'')+'>F</option><option value="O"'+(rec.gender==='O'?' selected':'')+'>O</option></select></div>'
-    + '</div><div class="form-row">'
-    + '<div class="form-group"><label class="form-label">Tipo doc. *</label><select class="form-select" id="ff-dtype"><option value="CPF"'+(rec.documentType==='CPF'?' selected':'')+'>CPF</option><option value="RG"'+(rec.documentType==='RG'?' selected':'')+'>RG</option><option value="PASSAPORTE"'+(rec.documentType==='PASSAPORTE'?' selected':'')+'>Passaporte</option></select></div>'
-    + '<div class="form-group"><label class="form-label">Número *</label><input type="text" class="form-input" id="ff-dnum" value="'+esc(rec.documentNumber)+'" maxlength="30"></div>'
-    + '</div><div class="form-row">'
-    + '<div class="form-group"><label class="form-label">Nascimento *</label><input type="date" class="form-input" id="ff-birth" value="'+esc(rec.birthDate)+'"></div>'
-    + '<div class="form-group"><label class="form-label">Nacionalidade</label><input type="text" class="form-input" id="ff-nat" value="'+esc(rec.nationality||'Brasileiro')+'" maxlength="50"></div>'
-    + '</div><div class="form-row">'
-    + '<div class="form-group"><label class="form-label">Profissão</label><input type="text" class="form-input" id="ff-prof" value="'+esc(rec.profession)+'" maxlength="100"></div>'
-    + '<div class="form-group"><label class="form-label">Finalidade</label><select class="form-select" id="ff-purpose">'+opt(PURPOSES,rec.purpose||'')+'</select></div>'
-    + '</div><hr style="border-color:var(--border);margin:14px 0"><div class="form-row">'
-    + '<div class="form-group" style="flex:2"><label class="form-label">Logradouro *</label><input type="text" class="form-input" id="ff-street" value="'+esc(rec.addressStreet)+'" maxlength="200"></div>'
-    + '<div class="form-group"><label class="form-label">Número</label><input type="text" class="form-input" id="ff-num" value="'+esc(rec.addressNumber)+'" maxlength="20"></div>'
-    + '</div><div class="form-row">'
-    + '<div class="form-group"><label class="form-label">Cidade *</label><input type="text" class="form-input" id="ff-city" value="'+esc(rec.addressCity)+'" maxlength="100"></div>'
-    + '<div class="form-group"><label class="form-label">UF *</label><input type="text" class="form-input" id="ff-state" value="'+esc(rec.addressState)+'" maxlength="2" style="text-transform:uppercase"></div>'
-    + '</div><div class="form-row">'
-    + '<div class="form-group"><label class="form-label">CEP</label><input type="text" class="form-input" id="ff-zip" value="'+esc(rec.addressZipcode)+'" maxlength="10"></div>'
-    + '<div class="form-group"><label class="form-label">País</label><input type="text" class="form-input" id="ff-country" value="'+esc(rec.addressCountry||'Brasil')+'" maxlength="50"></div>'
-    + '</div><hr style="border-color:var(--border);margin:14px 0"><div class="form-row">'
-    + '<div class="form-group"><label class="form-label">Chegada *</label><input type="date" class="form-input" id="ff-arr" value="'+esc(rec.arrivalDate)+'"></div>'
-    + '<div class="form-group"><label class="form-label">Saída *</label><input type="date" class="form-input" id="ff-dep" value="'+esc(rec.departureDate)+'"></div>'
-    + '</div><div class="form-row">'
-    + '<div class="form-group"><label class="form-label">Cidade origem</label><input type="text" class="form-input" id="ff-orig" value="'+esc(rec.originCity)+'" maxlength="100"></div>'
-    + '<div class="form-group"><label class="form-label">Cidade destino</label><input type="text" class="form-input" id="ff-dest" value="'+esc(rec.destinationCity)+'" maxlength="100"></div>'
-    + '</div><div class="form-row">'
-    + '<div class="form-group"><label class="form-label">Transporte</label><select class="form-select" id="ff-transp">'+opt(TRANSPORTS,rec.transportMethod||'')+'</select></div>'
-    + '<div class="form-group"><label class="form-label">Placa/nº</label><input type="text" class="form-input" id="ff-lic" value="'+esc(rec.transportLicense)+'" maxlength="20"></div>'
-    + '</div>'
-    + (rec.id ? '<input type="hidden" id="ff-id" value="'+rec.id+'">' : '<div class="form-row"><div class="form-group"><label class="form-label">guestId *</label><input type="text" class="form-input" id="ff-guestId" value="'+esc(rec.guestId)+'" placeholder="UUID do hóspede"></div><div class="form-group"><label class="form-label">stayId *</label><input type="text" class="form-input" id="ff-stayId" value="'+esc(rec.stayId)+'" placeholder="UUID da hospedagem"></div></div>')
-    + '<div class="modal-footer" style="padding:16px 0 0;border-top:1px solid var(--border);margin-top:16px;display:flex;justify-content:flex-end;gap:8px">'
-    + '<button class="btn btn-ghost" onclick="document.getElementById(\'fnrhModal\').classList.remove(\'active\')">Cancelar</button>'
-    + '<button class="btn btn-primary" onclick="saveFNRH()">Salvar</button></div>';
+  var GENDERS    = ['', 'M', 'F', 'O'];
+  var DOCTYPES   = ['CPF', 'RG', 'PASSAPORTE'];
+
+  // Estrutura estática — nenhum dado do servidor aqui
+  $('fnrhModalBody').innerHTML = [
+    '<div class="form-row">',
+      '<div class="form-group"><label class="form-label">Nome completo *</label><input type="text" class="form-input" id="ff-name" maxlength="200"></div>',
+      '<div class="form-group"><label class="form-label">Gênero</label><select class="form-select" id="ff-gender"></select></div>',
+    '</div><div class="form-row">',
+      '<div class="form-group"><label class="form-label">Tipo doc. *</label><select class="form-select" id="ff-dtype"></select></div>',
+      '<div class="form-group"><label class="form-label">Número *</label><input type="text" class="form-input" id="ff-dnum" maxlength="30"></div>',
+    '</div><div class="form-row">',
+      '<div class="form-group"><label class="form-label">Nascimento *</label><input type="date" class="form-input" id="ff-birth"></div>',
+      '<div class="form-group"><label class="form-label">Nacionalidade</label><input type="text" class="form-input" id="ff-nat" maxlength="50"></div>',
+    '</div><div class="form-row">',
+      '<div class="form-group"><label class="form-label">Profissão</label><input type="text" class="form-input" id="ff-prof" maxlength="100"></div>',
+      '<div class="form-group"><label class="form-label">Finalidade</label><select class="form-select" id="ff-purpose"></select></div>',
+    '</div><hr style="border-color:var(--border);margin:14px 0"><div class="form-row">',
+      '<div class="form-group" style="flex:2"><label class="form-label">Logradouro *</label><input type="text" class="form-input" id="ff-street" maxlength="200"></div>',
+      '<div class="form-group"><label class="form-label">Número</label><input type="text" class="form-input" id="ff-num" maxlength="20"></div>',
+    '</div><div class="form-row">',
+      '<div class="form-group"><label class="form-label">Cidade *</label><input type="text" class="form-input" id="ff-city" maxlength="100"></div>',
+      '<div class="form-group"><label class="form-label">UF *</label><input type="text" class="form-input" id="ff-state" maxlength="2" style="text-transform:uppercase"></div>',
+    '</div><div class="form-row">',
+      '<div class="form-group"><label class="form-label">CEP</label><input type="text" class="form-input" id="ff-zip" maxlength="10"></div>',
+      '<div class="form-group"><label class="form-label">País</label><input type="text" class="form-input" id="ff-country" maxlength="50"></div>',
+    '</div><hr style="border-color:var(--border);margin:14px 0"><div class="form-row">',
+      '<div class="form-group"><label class="form-label">Chegada *</label><input type="date" class="form-input" id="ff-arr"></div>',
+      '<div class="form-group"><label class="form-label">Saída *</label><input type="date" class="form-input" id="ff-dep"></div>',
+    '</div><div class="form-row">',
+      '<div class="form-group"><label class="form-label">Cidade origem</label><input type="text" class="form-input" id="ff-orig" maxlength="100"></div>',
+      '<div class="form-group"><label class="form-label">Cidade destino</label><input type="text" class="form-input" id="ff-dest" maxlength="100"></div>',
+    '</div><div class="form-row">',
+      '<div class="form-group"><label class="form-label">Transporte</label><select class="form-select" id="ff-transp"></select></div>',
+      '<div class="form-group"><label class="form-label">Placa/nº</label><input type="text" class="form-input" id="ff-lic" maxlength="20"></div>',
+    '</div>',
+    rec.id
+      ? '<input type="hidden" id="ff-id">'
+      : '<div class="form-row"><div class="form-group"><label class="form-label">guestId *</label><input type="text" class="form-input" id="ff-guestId" placeholder="UUID do hóspede"></div><div class="form-group"><label class="form-label">stayId *</label><input type="text" class="form-input" id="ff-stayId" placeholder="UUID da hospedagem"></div></div>',
+    '<div class="modal-footer" style="padding:16px 0 0;border-top:1px solid var(--border);margin-top:16px;display:flex;justify-content:flex-end;gap:8px" id="ff-footer"></div>',
+  ].join('');
+
+  // Popula campos com textContent / .value — nunca innerHTML com dados externos
+  var setVal = function(id, v) { var e = document.getElementById(id); if (e) e.value = v || ''; };
+  setVal('ff-name',    rec.fullName);
+  setVal('ff-dnum',    rec.documentNumber);
+  setVal('ff-birth',   rec.birthDate);
+  setVal('ff-nat',     rec.nationality || 'Brasileiro');
+  setVal('ff-prof',    rec.profession);
+  setVal('ff-street',  rec.addressStreet);
+  setVal('ff-num',     rec.addressNumber);
+  setVal('ff-city',    rec.addressCity);
+  setVal('ff-state',   rec.addressState);
+  setVal('ff-zip',     rec.addressZipcode);
+  setVal('ff-country', rec.addressCountry || 'Brasil');
+  setVal('ff-arr',     rec.arrivalDate);
+  setVal('ff-dep',     rec.departureDate);
+  setVal('ff-orig',    rec.originCity);
+  setVal('ff-dest',    rec.destinationCity);
+  setVal('ff-lic',     rec.transportLicense);
+  if (rec.id) setVal('ff-id', rec.id);
+  if (!rec.id) { setVal('ff-guestId', rec.guestId); setVal('ff-stayId', rec.stayId); }
+
+  // Selects — construídos com DOM, nunca innerHTML
+  buildSelect('ff-gender',  GENDERS,    rec.gender || '');
+  buildSelect('ff-dtype',   DOCTYPES,   rec.documentType || 'CPF');
+  buildSelect('ff-purpose', PURPOSES,   rec.purpose || '');
+  buildSelect('ff-transp',  TRANSPORTS, rec.transportMethod || '');
+
+  // Botões do footer via DOM
+  var footer = document.getElementById('ff-footer');
+  var btnCancel = document.createElement('button');
+  btnCancel.className = 'btn btn-ghost';
+  btnCancel.textContent = 'Cancelar';
+  btnCancel.addEventListener('click', function() { $('fnrhModal').classList.remove('active'); });
+  var btnSave = document.createElement('button');
+  btnSave.className = 'btn btn-primary';
+  btnSave.textContent = 'Salvar';
+  btnSave.addEventListener('click', saveFNRH);
+  footer.appendChild(btnCancel);
+  footer.appendChild(btnSave);
 }
 
-function esc(v) { return v ? String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;') : ''; }
+function esc(v) {
+  if (!v) return '';
+  return String(v)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
 function fv(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; }
 
@@ -1474,11 +1541,20 @@ document.addEventListener('DOMContentLoaded', function() {
     $(id).addEventListener('click', function(e) { if (e.target.id === id) $(id).classList.remove('active'); });
   });
 
-  const token = sessionStorage.getItem('lobby_token');
+  // Token não é salvo no sessionStorage — fica só em memória.
+  // No reload, tenta restaurar a sessão via cookie httpOnly através do endpoint /refresh.
   const userStr = sessionStorage.getItem('lobby_user');
-  if (token && userStr) {
-    try { state.token = token; state.user = JSON.parse(userStr); state.hotelId = state.user.hotelId; showApp(); }
-    catch(e) { logout(); }
+  if (userStr) {
+    fetch('/api/auth/refresh', { method: 'POST' })
+      .then(function(r) { return r.ok ? r.json() : Promise.reject(); })
+      .then(function(data) {
+        state.token = data.token;
+        state.user = data.user;
+        state.hotelId = data.user.hotelId;
+        sessionStorage.setItem('lobby_user', JSON.stringify(data.user));
+        showApp();
+      })
+      .catch(function() { logout(); });
   }
 });
 </script>
