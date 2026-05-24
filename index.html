@@ -116,6 +116,63 @@ input, select { font-family: inherit; }
 .detail-row span:last-child { font-weight: 500; }
 .mobile-menu-btn { display: none; position: fixed; top: 16px; left: 16px; z-index: 101; background: var(--surface); border: 1px solid var(--border); color: var(--text); width: 36px; height: 36px; border-radius: var(--radius-sm); align-items: center; justify-content: center; }
 @media (max-width: 768px) { .mobile-menu-btn { display: flex; } .sidebar { transform: translateX(-100%); transition: transform 0.2s; } .sidebar.open { transform: translateX(0); } .main { margin-left: 0; padding: 70px 20px 20px; } .form-row { grid-template-columns: 1fr; } .rooms-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); } }
+/* --- Tabelas de dados --- */
+.data-table { width: 100%; border-collapse: collapse; }
+.data-table th { background: var(--bg-soft); color: var(--text-muted); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+.data-table td { padding: 11px 12px; border-bottom: 1px solid var(--border-soft); font-size: 13px; }
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td { background: var(--surface-hover); }
+/* --- Tabs (Relatórios) --- */
+.tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.tab-btn { background: none; color: var(--text-muted); padding: 8px 14px; font-size: 13px; font-weight: 500; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; border-radius: 0; cursor: pointer; }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+/* --- Gráficos --- */
+.chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+.chart-wrap canvas { max-height: 240px; }
+/* --- KPI grid (Relatórios) --- */
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 20px; }
+.kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.kpi-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.kpi-value { font-size: 22px; font-weight: 700; }
+.kpi-value.blue { color: var(--accent); }
+.kpi-value.green { color: var(--success); }
+.kpi-delta { font-size: 11px; margin-top: 4px; }
+.kpi-delta.up { color: var(--success); }
+.kpi-delta.down { color: var(--danger); }
+/* --- Seletor de período --- */
+.period-row { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+.period-row label { font-size: 12px; color: var(--text-muted); }
+.period-row input[type=date] { background: var(--bg-soft); border: 1px solid var(--border); color: var(--text); padding: 7px 10px; border-radius: var(--radius-sm); font-size: 13px; }
+/* --- Chips de status para tarefas --- */
+.status-chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+.chip-pending        { background: rgba(245,158,11,0.12); color: var(--warning); }
+.chip-in_progress    { background: rgba(59,130,246,0.12);  color: var(--accent); }
+.chip-done           { background: rgba(16,185,129,0.12);  color: var(--success); }
+.chip-inspected      { background: rgba(16,185,129,0.18);  color: var(--success); font-weight: 700; }
+.chip-exported       { background: rgba(16,185,129,0.12);  color: var(--success); }
+.chip-pending-export { background: rgba(245,158,11,0.12); color: var(--warning); }
+/* --- Prioridade colorida --- */
+.priority-urgent { color: var(--danger); font-weight: 600; }
+.priority-high   { color: var(--warning); }
+.priority-normal { color: var(--text); }
+.priority-low    { color: var(--text-dim); }
+/* --- Cards de temporada --- */
+.season-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+.s-type  { font-size: 11px; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px; }
+.s-name  { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+.s-dates { font-size: 12px; color: var(--text-muted); }
+.s-mult  { font-size: 20px; font-weight: 700; }
+/* --- Calculadora de preço --- */
+.calc-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; max-width: 460px; margin-top: 24px; }
+.calc-result { font-size: 26px; font-weight: 700; color: var(--success); margin-top: 12px; }
+/* --- Modal largo (FNRH) --- */
+.modal-wide { max-width: 680px; }
+@media (max-width: 768px) {
+  .period-row { flex-direction: column; align-items: flex-start; }
+  .kpi-grid { grid-template-columns: 1fr 1fr; }
+}
 </style>
 </head>
 <body>
@@ -149,6 +206,10 @@ input, select { font-family: inherit; }
       <button class="nav-item" data-page="checkout"><span class="nav-icon">←</span> Check-out</button>
       <button class="nav-item" data-page="rooms"><span class="nav-icon">▥</span> Quartos</button>
       <button class="nav-item" data-page="guests"><span class="nav-icon">○</span> Hóspedes</button>
+      <button class="nav-item" data-page="gov"><span class="nav-icon">✦</span> Governança</button>
+      <button class="nav-item" data-page="tariff"><span class="nav-icon">◈</span> Tarifário</button>
+      <button class="nav-item" data-page="fnrh"><span class="nav-icon">≡</span> FNRH</button>
+      <button class="nav-item" data-page="reports"><span class="nav-icon">▤</span> Relatórios</button>
     </nav>
     <div class="sidebar-footer">
       <div class="user-card">
@@ -228,6 +289,131 @@ input, select { font-family: inherit; }
       <div class="form-group" style="max-width:400px;margin-bottom:16px"><input type="search" class="form-input" id="guestSearch" placeholder="Buscar por nome ou CPF..."></div>
       <div class="list" id="guestsList"></div>
     </section>
+
+    <!-- GOVERNANÇA -->
+    <section class="page" id="page-gov">
+      <div class="page-header">
+        <div><h1 class="page-title">Governança</h1><p class="page-subtitle">Gestão de limpeza e faxineiras</p></div>
+        <button class="btn btn-ghost" id="generateDailyBtn">⚡ Gerar tarefas do dia</button>
+      </div>
+      <div class="tabs" id="govTabs">
+        <button class="tab-btn active" data-tab="gov-staff">Faxineiras</button>
+        <button class="tab-btn" data-tab="gov-tasks">Tarefas</button>
+      </div>
+      <div class="tab-panel active" id="tab-gov-staff">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+          <button class="btn btn-primary" id="newStaffBtn">+ Nova faxineira</button>
+        </div>
+        <div class="list" id="staffList"></div>
+      </div>
+      <div class="tab-panel" id="tab-gov-tasks">
+        <div class="period-row" style="margin-bottom:12px">
+          <select class="form-select" id="taskStatusFilter" style="width:auto">
+            <option value="">Todos os status</option>
+            <option value="pending">Pendente</option>
+            <option value="in_progress">Em andamento</option>
+            <option value="done">Concluído</option>
+            <option value="inspected">Inspecionado</option>
+            <option value="inspection_failed">Reprovado</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted)"><input type="checkbox" id="taskTodayFilter" checked> Somente hoje</label>
+          <button class="btn btn-ghost" id="newTaskBtn" style="margin-left:auto">+ Nova tarefa</button>
+        </div>
+        <div style="overflow-x:auto"><table class="data-table">
+          <thead><tr><th>Quarto</th><th>Prioridade</th><th>Status</th><th>Faxineira</th><th>Tempo</th><th>Ações</th></tr></thead>
+          <tbody id="tasksBody"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- TARIFÁRIO -->
+    <section class="page" id="page-tariff">
+      <div class="page-header">
+        <div><h1 class="page-title">Tarifário Dinâmico</h1><p class="page-subtitle">Temporadas e multiplicadores de preço</p></div>
+      </div>
+      <div class="tabs" id="tariffTabs">
+        <button class="tab-btn active" data-tab="tariff-seasons">Temporadas</button>
+        <button class="tab-btn" data-tab="tariff-weekday">Dias da semana</button>
+        <button class="tab-btn" data-tab="tariff-calc">Calculadora</button>
+      </div>
+      <div class="tab-panel active" id="tab-tariff-seasons">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+          <button class="btn btn-primary" id="newSeasonBtn">+ Nova temporada</button>
+        </div>
+        <div id="seasonsList"></div>
+      </div>
+      <div class="tab-panel" id="tab-tariff-weekday">
+        <div class="form-card" style="max-width:360px">
+          <p style="font-size:12px;color:var(--text-muted);margin-bottom:16px">1.0 = preço base · acima = mais caro · abaixo = desconto (0.5–3.0)</p>
+          <div id="weekdayInputs"></div>
+          <button class="btn btn-primary btn-block" style="margin-top:16px" id="saveWeekdayBtn">Salvar multiplicadores</button>
+        </div>
+      </div>
+      <div class="tab-panel" id="tab-tariff-calc">
+        <div class="calc-card">
+          <div class="form-group"><label class="form-label">Quarto</label><select class="form-select" id="calcRoom"></select></div>
+          <div class="form-row">
+            <div class="form-group"><label class="form-label">Check-in</label><input type="date" class="form-input" id="calcCheckin"></div>
+            <div class="form-group"><label class="form-label">Check-out</label><input type="date" class="form-input" id="calcCheckout"></div>
+          </div>
+          <button class="btn btn-primary" id="calcBtn">Calcular tarifa</button>
+          <div id="calcResult"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FNRH -->
+    <section class="page" id="page-fnrh">
+      <div class="page-header">
+        <div><h1 class="page-title">FNRH</h1><p class="page-subtitle">Ficha Nacional de Registro de Hóspedes</p></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost" id="exportFnrhBtn">↓ Exportar SISMATUR</button>
+          <button class="btn btn-primary" id="newFnrhBtn">+ Novo registro</button>
+        </div>
+      </div>
+      <div class="period-row">
+        <label>Mês:</label>
+        <input type="month" id="fnrhMonth" class="form-input" style="width:auto">
+        <select class="form-select" id="fnrhExported" style="width:auto">
+          <option value="">Todos</option>
+          <option value="false">Pendentes de exportação</option>
+          <option value="true">Exportados</option>
+        </select>
+        <button class="btn btn-ghost" id="fnrhSearchBtn">Filtrar</button>
+      </div>
+      <div style="overflow-x:auto"><table class="data-table">
+        <thead><tr><th>Nome</th><th>Documento</th><th>Chegada</th><th>Saída</th><th>Cidade/UF</th><th>Status</th><th></th></tr></thead>
+        <tbody id="fnrhBody"></tbody>
+      </table></div>
+      <div id="fnrhPager" style="text-align:center;margin-top:12px;font-size:12px;color:var(--text-muted)"></div>
+    </section>
+
+    <!-- RELATÓRIOS -->
+    <section class="page" id="page-reports">
+      <div class="page-header">
+        <div><h1 class="page-title">Relatórios</h1><p class="page-subtitle">Analytics e indicadores do hotel</p></div>
+        <button class="btn btn-primary" id="loadReportBtn">Atualizar</button>
+      </div>
+      <div class="period-row">
+        <label>De:</label><input type="date" class="form-input" id="reportFrom" style="width:auto">
+        <label>Até:</label><input type="date" class="form-input" id="reportTo" style="width:auto">
+        <button class="btn btn-ghost" id="preset7">7 dias</button>
+        <button class="btn btn-ghost" id="preset30">30 dias</button>
+        <button class="btn btn-ghost" id="preset90">90 dias</button>
+      </div>
+      <div class="tabs" id="reportsTabs">
+        <button class="tab-btn active" data-tab="rep-occ">Ocupação</button>
+        <button class="tab-btn" data-tab="rep-rev">Receita</button>
+        <button class="tab-btn" data-tab="rep-guests">Hóspedes</button>
+        <button class="tab-btn" data-tab="rep-staff">Performance</button>
+        <button class="tab-btn" data-tab="rep-fin">Financeiro</button>
+      </div>
+      <div class="tab-panel active" id="tab-rep-occ"><div id="repOccContent"></div></div>
+      <div class="tab-panel" id="tab-rep-rev"><div id="repRevContent"></div></div>
+      <div class="tab-panel" id="tab-rep-guests"><div id="repGuestsContent"></div></div>
+      <div class="tab-panel" id="tab-rep-staff"><div id="repStaffContent"></div></div>
+      <div class="tab-panel" id="tab-rep-fin"><div id="repFinContent"></div></div>
+    </section>
   </main>
 </div>
 
@@ -238,6 +424,96 @@ input, select { font-family: inherit; }
       <button class="modal-close" id="modalClose">✕</button>
     </div>
     <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<!-- Modal: Faxineira -->
+<div class="modal-overlay" id="staffModal">
+  <div class="modal">
+    <div class="modal-header"><h3 class="modal-title" id="staffModalTitle">Nova Faxineira</h3><button class="modal-close" id="staffModalClose">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Nome *</label><input type="text" class="form-input" id="staffName" placeholder="Nome completo" maxlength="120"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">PIN (4–6 dígitos)</label><input type="text" class="form-input" id="staffPin" placeholder="1234" maxlength="6" inputmode="numeric"></div>
+        <div class="form-group"><label class="form-label">Telefone (opcional)</label><input type="tel" class="form-input" id="staffPhone" placeholder="(11) 98765-4321" maxlength="15"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="staffModalCancel">Cancelar</button>
+      <button class="btn btn-primary" id="staffModalSave">Salvar</button>
+    </div>
+  </div>
+</div>
+<!-- Modal: Nova tarefa -->
+<div class="modal-overlay" id="taskModal">
+  <div class="modal">
+    <div class="modal-header"><h3 class="modal-title">Nova Tarefa de Limpeza</h3><button class="modal-close" id="taskModalClose">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Quarto *</label><select class="form-select" id="taskRoom"></select></div>
+      <div class="form-group"><label class="form-label">Faxineira</label><select class="form-select" id="taskStaff"></select></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Prioridade</label>
+          <select class="form-select" id="taskPriority">
+            <option value="normal">Normal</option><option value="high">Alta</option>
+            <option value="urgent">Urgente</option><option value="low">Baixa</option>
+          </select>
+        </div>
+        <div class="form-group"><label class="form-label">Tempo estimado (min)</label><input type="number" class="form-input" id="taskMinutes" value="30" min="5" max="480"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Observações</label><input type="text" class="form-input" id="taskNotes" placeholder="Opcional..." maxlength="500"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="taskModalCancel">Cancelar</button>
+      <button class="btn btn-primary" id="taskModalSave">Criar tarefa</button>
+    </div>
+  </div>
+</div>
+<!-- Modal: Inspecionar tarefa -->
+<div class="modal-overlay" id="inspectModal">
+  <div class="modal">
+    <div class="modal-header"><h3 class="modal-title">Inspecionar Tarefa</h3><button class="modal-close" id="inspectModalClose">✕</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="inspectTaskId">
+      <div class="form-group"><label class="form-label">Nota (1–5) *</label><input type="number" class="form-input" id="inspectScore" value="5" min="1" max="5"></div>
+      <div class="form-group"><label class="form-label">Observações</label><input type="text" class="form-input" id="inspectNotes" placeholder="Opcional..."></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" style="color:var(--danger);border:1px solid var(--danger)" id="inspectFailBtn">✕ Reprovar</button>
+      <button class="btn btn-primary" id="inspectPassBtn">✓ Aprovar</button>
+    </div>
+  </div>
+</div>
+<!-- Modal: Temporada -->
+<div class="modal-overlay" id="seasonModal">
+  <div class="modal">
+    <div class="modal-header"><h3 class="modal-title" id="seasonModalTitle">Nova Temporada</h3><button class="modal-close" id="seasonModalClose">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Nome *</label><input type="text" class="form-input" id="seasonName" placeholder="Ex: Carnaval 2026" maxlength="100"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Tipo</label>
+          <select class="form-select" id="seasonType">
+            <option value="low">Baixa temporada</option><option value="regular">Regular</option>
+            <option value="high">Alta temporada</option><option value="peak">Pico</option>
+          </select>
+        </div>
+        <div class="form-group"><label class="form-label">Multiplicador</label><input type="number" class="form-input" id="seasonMult" value="1.0" min="0.5" max="3.0" step="0.05"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Início *</label><input type="date" class="form-input" id="seasonStart"></div>
+        <div class="form-group"><label class="form-label">Fim *</label><input type="date" class="form-input" id="seasonEnd"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="seasonModalCancel">Cancelar</button>
+      <button class="btn btn-primary" id="seasonModalSave">Salvar</button>
+    </div>
+  </div>
+</div>
+<!-- Modal: FNRH (largo) -->
+<div class="modal-overlay" id="fnrhModal">
+  <div class="modal modal-wide">
+    <div class="modal-header"><h3 class="modal-title" id="fnrhModalTitle">Novo Registro FNRH</h3><button class="modal-close" id="fnrhModalClose">✕</button></div>
+    <div class="modal-body" id="fnrhModalBody"></div>
   </div>
 </div>
 
@@ -539,15 +815,591 @@ function showGuestDetails(g) {
   $('modalOverlay').classList.add('active');
 }
 
+// ===== TAB HELPER =====
+function initTabs(containerId) {
+  var container = $(containerId);
+  if (!container) return;
+  container.querySelectorAll('.tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      container.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+      container.parentElement.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
+      btn.classList.add('active');
+      $('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+}
+
+// ===== GOVERNANÇA =====
+var govState = { staff: [], editing: null };
+var PRIORITY_LABELS = { urgent:'Urgente', high:'Alta', normal:'Normal', low:'Baixa' };
+var STATUS_LABELS = { pending:'Pendente', in_progress:'Em andamento', done:'Concluído', inspected:'Inspecionado', inspection_failed:'Reprovado' };
+
+function loadGov() { loadGovStaff(); loadGovTasks(); }
+
+async function loadGovStaff() {
+  try {
+    govState.staff = await api('/api/hotels/' + state.hotelId + '/cleaning/staff');
+    renderStaff();
+  } catch(e) { toast('Erro ao carregar faxineiras: ' + e.message, 'error'); }
+}
+
+function renderStaff() {
+  var c = $('staffList'); clear(c);
+  if (!govState.staff.length) { c.appendChild(el('div', {class:'empty', text:'Nenhuma faxineira cadastrada'})); return; }
+  govState.staff.forEach(function(s) {
+    c.appendChild(el('div', {class:'list-item'}, [
+      el('div', {class:'list-main'}, [
+        el('strong', {text: s.name + (!s.isActive ? ' (inativa)' : '')}),
+        el('span', {text: s.phone || 'Sem telefone'})
+      ]),
+      el('div', {style:'display:flex;gap:6px'}, [
+        el('button', {class:'btn btn-ghost', style:'padding:4px 10px;font-size:12px', on:{click:function(){openStaffModal(s)}}}, ['Editar']),
+        s.isActive ? el('button', {class:'btn btn-ghost', style:'padding:4px 10px;font-size:12px;color:var(--danger)', on:{click:function(){deactivateStaff(s.id)}}}, ['Desativar']) : null
+      ])
+    ]));
+  });
+}
+
+function openStaffModal(s) {
+  govState.editing = s || null;
+  $('staffModalTitle').textContent = s ? 'Editar Faxineira' : 'Nova Faxineira';
+  $('staffName').value = s ? s.name : '';
+  $('staffPin').value = '';
+  $('staffPhone').value = s ? (s.phone || '') : '';
+  $('staffModal').classList.add('active');
+}
+
+async function saveStaff() {
+  var name = $('staffName').value.trim(), pin = $('staffPin').value.trim(), phone = $('staffPhone').value.trim();
+  if (name.length < 3) return toast('Nome deve ter ao menos 3 caracteres', 'error');
+  if (!govState.editing && !pin) return toast('PIN obrigatório para nova faxineira', 'error');
+  if (pin && !/^\d{4,6}$/.test(pin)) return toast('PIN deve ter 4 a 6 dígitos numéricos', 'error');
+  var body = { name: name };
+  if (pin) body.pin = pin;
+  if (phone) body.phone = phone;
+  try {
+    if (govState.editing) {
+      await api('/api/hotels/' + state.hotelId + '/cleaning/staff/' + govState.editing.id, {method:'PUT', body:JSON.stringify(body)});
+      toast('Faxineira atualizada', 'success');
+    } else {
+      await api('/api/hotels/' + state.hotelId + '/cleaning/staff', {method:'POST', body:JSON.stringify(body)});
+      toast('Faxineira criada', 'success');
+    }
+    $('staffModal').classList.remove('active');
+    loadGovStaff();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function deactivateStaff(id) {
+  if (!confirm('Desativar esta faxineira?')) return;
+  try {
+    await api('/api/hotels/' + state.hotelId + '/cleaning/staff/' + id, {method:'DELETE'});
+    toast('Faxineira desativada', 'success');
+    loadGovStaff();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function loadGovTasks() {
+  var status = $('taskStatusFilter').value, today = $('taskTodayFilter').checked;
+  var url = '/api/hotels/' + state.hotelId + '/cleaning/tasks';
+  var params = [];
+  if (status) params.push('status=' + status);
+  if (today)  params.push('date=today');
+  if (params.length) url += '?' + params.join('&');
+  try {
+    renderTasks(await api(url));
+  } catch(e) { toast('Erro ao carregar tarefas: ' + e.message, 'error'); }
+}
+
+function renderTasks(tasks) {
+  var body = $('tasksBody'); clear(body);
+  if (!tasks.length) {
+    body.appendChild(el('tr', {}, [el('td', {colspan:'6', class:'empty', text:'Nenhuma tarefa encontrada'})]));
+    return;
+  }
+  tasks.forEach(function(t) {
+    var acts = [];
+    if (t.status === 'pending')     acts.push(el('button', {class:'btn btn-ghost', style:'padding:3px 8px;font-size:11px', on:{click:function(){taskAction(t.id,'start')}}}, ['Iniciar']));
+    if (t.status === 'in_progress') acts.push(el('button', {class:'btn btn-ghost', style:'padding:3px 8px;font-size:11px', on:{click:function(){taskAction(t.id,'complete')}}}, ['Concluir']));
+    if (t.status === 'done')        acts.push(el('button', {class:'btn btn-ghost', style:'padding:3px 8px;font-size:11px', on:{click:function(){openInspect(t.id)}}}, ['Inspecionar']));
+    body.appendChild(el('tr', {}, [
+      el('td', {text: t.roomNumber || '-'}),
+      el('td', {class:'priority-' + t.priority, text: PRIORITY_LABELS[t.priority] || t.priority}),
+      el('td', {}, [el('span', {class:'status-chip chip-' + t.status, text: STATUS_LABELS[t.status] || t.status})]),
+      el('td', {text: t.staffName || '—'}),
+      el('td', {text: t.actualMinutes ? t.actualMinutes + 'min' : t.estimatedMinutes + 'min est.'}),
+      el('td', {}, acts)
+    ]));
+  });
+}
+
+async function taskAction(id, action) {
+  try {
+    await api('/api/cleaning/tasks/' + id + '/' + action, {method:'PUT', body:'{}'});
+    toast('Tarefa atualizada', 'success');
+    loadGovTasks(); loadRooms();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+function openInspect(id) {
+  $('inspectTaskId').value = id;
+  $('inspectScore').value = 5;
+  $('inspectNotes').value = '';
+  $('inspectModal').classList.add('active');
+}
+
+async function submitInspect(passed) {
+  var score = parseInt($('inspectScore').value), notes = $('inspectNotes').value.trim();
+  if (!score || score < 1 || score > 5) return toast('Nota deve ser entre 1 e 5', 'error');
+  try {
+    await api('/api/cleaning/tasks/' + $('inspectTaskId').value + '/inspect', {method:'PUT', body:JSON.stringify({score:score, notes:notes||null, passed:passed})});
+    toast(passed ? 'Aprovado!' : 'Reprovado — nova tarefa de retrabalho criada', passed ? 'success' : 'info');
+    $('inspectModal').classList.remove('active');
+    loadGovTasks(); loadRooms();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function generateDaily() {
+  try {
+    var r = await api('/api/hotels/' + state.hotelId + '/cleaning/tasks/generate-daily', {method:'POST', body:'{}'});
+    toast(r.created + ' tarefa(s) gerada(s)', r.created > 0 ? 'success' : 'info');
+    loadGovTasks();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+function openTaskModal() {
+  var rs = $('taskRoom'), ss = $('taskStaff');
+  clear(rs); clear(ss);
+  rs.appendChild(el('option', {value:'', text:'Selecione um quarto'}));
+  ss.appendChild(el('option', {value:'', text:'Sem atribuição'}));
+  state.rooms.forEach(function(r) { rs.appendChild(el('option', {value:r.id, text:'Quarto ' + r.roomNumber + ' · ' + r.roomType})); });
+  govState.staff.filter(function(s) { return s.isActive; }).forEach(function(s) { ss.appendChild(el('option', {value:s.id, text:s.name})); });
+  $('taskModal').classList.add('active');
+}
+
+async function saveTask() {
+  var roomId = $('taskRoom').value;
+  if (!roomId) return toast('Selecione um quarto', 'error');
+  try {
+    await api('/api/hotels/' + state.hotelId + '/cleaning/tasks', {method:'POST', body:JSON.stringify({
+      roomId: roomId,
+      assignedTo: $('taskStaff').value || null,
+      priority: $('taskPriority').value,
+      estimatedMinutes: parseInt($('taskMinutes').value),
+      notes: $('taskNotes').value.trim() || null
+    })});
+    toast('Tarefa criada', 'success');
+    $('taskModal').classList.remove('active');
+    loadGovTasks();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// ===== TARIFÁRIO =====
+var tariffState = { seasonEditing: null };
+var SEASON_TYPES = { low:'Baixa', regular:'Regular', high:'Alta', peak:'Pico' };
+var SEASON_COLORS = { low:'var(--accent)', regular:'var(--text-muted)', high:'var(--warning)', peak:'var(--danger)' };
+var DAY_PT = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+
+function loadTariff() { loadSeasons(); loadWeekday(); populateCalcRoom(); }
+
+async function loadSeasons() {
+  try {
+    var seasons = await api('/api/hotels/' + state.hotelId + '/seasons');
+    var c = $('seasonsList'); clear(c);
+    if (!seasons.length) { c.appendChild(el('div', {class:'empty', text:'Nenhuma temporada cadastrada'})); return; }
+    seasons.forEach(function(s) {
+      var color = SEASON_COLORS[s.type] || 'var(--text)';
+      c.appendChild(el('div', {class:'season-card'}, [
+        el('div', {}, [
+          el('div', {class:'s-type', style:'color:'+color, text: SEASON_TYPES[s.type] || s.type}),
+          el('div', {class:'s-name', text: s.name}),
+          el('div', {class:'s-dates', text: fmtBR(s.startDate) + ' → ' + fmtBR(s.endDate)})
+        ]),
+        el('div', {style:'text-align:right'}, [
+          el('div', {class:'s-mult', style:'color:'+color, text:'×' + parseFloat(s.priceMultiplier).toFixed(2)}),
+          el('div', {style:'display:flex;gap:6px;margin-top:8px'}, [
+            el('button', {class:'btn btn-ghost', style:'padding:3px 8px;font-size:11px', on:{click:function(){openSeasonModal(s)}}}, ['Editar']),
+            el('button', {class:'btn btn-ghost', style:'padding:3px 8px;font-size:11px;color:var(--danger)', on:{click:function(){deleteSeason(s.id)}}}, ['Remover'])
+          ])
+        ])
+      ]));
+    });
+  } catch(e) { toast('Erro ao carregar temporadas: ' + e.message, 'error'); }
+}
+
+function fmtBR(d) { if (!d) return '-'; var p = d.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; }
+
+function openSeasonModal(s) {
+  tariffState.seasonEditing = s || null;
+  $('seasonModalTitle').textContent = s ? 'Editar Temporada' : 'Nova Temporada';
+  $('seasonName').value  = s ? s.name  : '';
+  $('seasonType').value  = s ? s.type  : 'regular';
+  $('seasonMult').value  = s ? s.priceMultiplier : '1.0';
+  $('seasonStart').value = s ? s.startDate : '';
+  $('seasonEnd').value   = s ? s.endDate   : '';
+  $('seasonModal').classList.add('active');
+}
+
+async function saveSeason() {
+  var name = $('seasonName').value.trim(), start = $('seasonStart').value, end = $('seasonEnd').value;
+  if (!name) return toast('Nome obrigatório', 'error');
+  if (!start || !end) return toast('Datas obrigatórias', 'error');
+  if (end <= start) return toast('Data de fim deve ser após o início', 'error');
+  var body = JSON.stringify({name:name, type:$('seasonType').value, priceMultiplier:parseFloat($('seasonMult').value), startDate:start, endDate:end});
+  try {
+    if (tariffState.seasonEditing) {
+      await api('/api/hotels/'+state.hotelId+'/seasons/'+tariffState.seasonEditing.id, {method:'PUT', body:body});
+      toast('Temporada atualizada', 'success');
+    } else {
+      await api('/api/hotels/'+state.hotelId+'/seasons', {method:'POST', body:body});
+      toast('Temporada criada', 'success');
+    }
+    $('seasonModal').classList.remove('active');
+    loadSeasons();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function deleteSeason(id) {
+  if (!confirm('Remover esta temporada?')) return;
+  try {
+    await api('/api/hotels/'+state.hotelId+'/seasons/'+id, {method:'DELETE'});
+    toast('Temporada removida', 'success'); loadSeasons();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function loadWeekday() {
+  try {
+    var wm = await api('/api/hotels/'+state.hotelId+'/weekday-multipliers');
+    var c = $('weekdayInputs'); clear(c);
+    for (var i = 0; i < 7; i++) {
+      c.appendChild(el('div', {class:'form-row', style:'align-items:center;margin-bottom:10px'}, [
+        el('label', {class:'form-label', style:'min-width:40px;margin:0', text: DAY_PT[i]}),
+        el('input', {type:'number', class:'form-input', id:'wd-'+i, value:String(wm[String(i)] || 1.0), min:'0.5', max:'3.0', step:'0.05'})
+      ]));
+    }
+  } catch(e) { toast('Erro ao carregar multiplicadores', 'error'); }
+}
+
+async function saveWeekday() {
+  var body = {};
+  for (var i = 0; i < 7; i++) {
+    var v = parseFloat($('wd-'+i).value);
+    if (isNaN(v) || v < 0.5 || v > 3.0) return toast('Todos os valores devem ser entre 0.5 e 3.0', 'error');
+    body[String(i)] = v;
+  }
+  try {
+    await api('/api/hotels/'+state.hotelId+'/weekday-multipliers', {method:'PUT', body:JSON.stringify(body)});
+    toast('Multiplicadores salvos', 'success');
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+function populateCalcRoom() {
+  var sel = $('calcRoom'); clear(sel);
+  sel.appendChild(el('option', {value:'', text:'Selecione um quarto'}));
+  state.rooms.forEach(function(r) { sel.appendChild(el('option', {value:r.id, text:'Quarto ' + r.roomNumber + ' · ' + r.roomType})); });
+}
+
+async function calcTariff() {
+  var roomId = $('calcRoom').value, ci = $('calcCheckin').value, co = $('calcCheckout').value;
+  if (!roomId || !ci || !co) return toast('Preencha todos os campos', 'error');
+  try {
+    var r = await api('/api/hotels/'+state.hotelId+'/tariff/calculate?roomId='+roomId+'&checkin='+ci+'&checkout='+co);
+    var c = $('calcResult'); clear(c);
+    c.appendChild(el('div', {class:'calc-result', text:'R$ ' + r.totalPrice.toFixed(2)}));
+    c.appendChild(el('p', {style:'font-size:12px;color:var(--text-muted);margin-top:4px', text: r.totalNights + ' noites · média R$ ' + r.averageNightPrice.toFixed(2) + '/noite · base R$ ' + r.basePrice.toFixed(2)}));
+    var tbl = el('table', {class:'data-table', style:'margin-top:16px'});
+    var thead = el('thead');
+    thead.appendChild(el('tr', {}, ['Data','Dia','Temporada','×Temp','×Dia','Valor'].map(function(h){return el('th',{text:h});})));
+    tbl.appendChild(thead);
+    var tbody = el('tbody');
+    r.breakdown.forEach(function(b) {
+      tbody.appendChild(el('tr',{},[
+        el('td',{text:fmtBR(b.date)}), el('td',{text:b.dayOfWeek}),
+        el('td',{text:b.season||'—'}), el('td',{text:'×'+b.seasonMultiplier.toFixed(2)}),
+        el('td',{text:'×'+b.weekdayMultiplier.toFixed(2)}),
+        el('td',{style:'font-weight:600',text:'R$ '+b.finalPrice.toFixed(2)})
+      ]));
+    });
+    tbl.appendChild(tbody);
+    c.appendChild(tbl);
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+// ===== FNRH =====
+var fnrhPage = 1;
+
+function loadFNRH() {
+  if (!$('fnrhMonth').value) {
+    var d = new Date();
+    $('fnrhMonth').value = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+  }
+  fetchFNRH();
+}
+
+async function fetchFNRH() {
+  var month = $('fnrhMonth').value, exp = $('fnrhExported').value;
+  var url = '/api/hotels/'+state.hotelId+'/fnrh?page='+fnrhPage+'&limit=20';
+  if (month) url += '&month='+month;
+  if (exp !== '') url += '&exported='+exp;
+  try {
+    var data = await api(url);
+    var body = $('fnrhBody'); clear(body);
+    if (!data.data.length) {
+      body.appendChild(el('tr',{},[el('td',{colspan:'7',class:'empty',text:'Nenhum registro encontrado'})]));
+      $('fnrhPager').textContent = '';
+      return;
+    }
+    data.data.forEach(function(r) {
+      var chip = el('span', {class:'status-chip ' + (r.exportedToSismatur ? 'chip-exported' : 'chip-pending-export'), text: r.exportedToSismatur ? 'Exportado' : 'Pendente'});
+      body.appendChild(el('tr',{},[
+        el('td',{text:r.fullName}), el('td',{text:r.documentType+': '+r.documentNumber}),
+        el('td',{text:fmtBR(r.arrivalDate)}), el('td',{text:fmtBR(r.departureDate)}),
+        el('td',{text:(r.addressCity||'?')+'/'+r.addressState}),
+        el('td',{},[chip]),
+        el('td',{}, r.exportedToSismatur ? [] : [el('button',{class:'btn btn-ghost',style:'padding:3px 8px;font-size:11px',on:{click:function(){openFNRHModal(r)}}},['Editar'])])
+      ]));
+    });
+    $('fnrhPager').textContent = 'Página ' + data.page + ' de ' + (data.pages||1) + ' · ' + data.total + ' registros';
+  } catch(e) { toast('Erro ao carregar FNRH: ' + e.message, 'error'); }
+}
+
+function openFNRHModal(rec) {
+  rec = rec || {};
+  $('fnrhModalTitle').textContent = rec.id ? 'Editar Registro FNRH' : 'Novo Registro FNRH';
+  var PURPOSES = ['','turismo','negocios','evento','saude','estudo','outro'];
+  var TRANSPORTS = ['','carro','onibus','aviao','trem','barco','outro'];
+  function opt(arr, cur) { return arr.map(function(v){return '<option value="'+v+'"'+(v===cur?' selected':'')+'>'+v+'</option>';}).join(''); }
+  $('fnrhModalBody').innerHTML = '<div class="form-row">'
+    + '<div class="form-group"><label class="form-label">Nome completo *</label><input type="text" class="form-input" id="ff-name" value="'+esc(rec.fullName)+'" maxlength="200"></div>'
+    + '<div class="form-group"><label class="form-label">Gênero</label><select class="form-select" id="ff-gender"><option value="">—</option><option value="M"'+(rec.gender==='M'?' selected':'')+'>M</option><option value="F"'+(rec.gender==='F'?' selected':'')+'>F</option><option value="O"'+(rec.gender==='O'?' selected':'')+'>O</option></select></div>'
+    + '</div><div class="form-row">'
+    + '<div class="form-group"><label class="form-label">Tipo doc. *</label><select class="form-select" id="ff-dtype"><option value="CPF"'+(rec.documentType==='CPF'?' selected':'')+'>CPF</option><option value="RG"'+(rec.documentType==='RG'?' selected':'')+'>RG</option><option value="PASSAPORTE"'+(rec.documentType==='PASSAPORTE'?' selected':'')+'>Passaporte</option></select></div>'
+    + '<div class="form-group"><label class="form-label">Número *</label><input type="text" class="form-input" id="ff-dnum" value="'+esc(rec.documentNumber)+'" maxlength="30"></div>'
+    + '</div><div class="form-row">'
+    + '<div class="form-group"><label class="form-label">Nascimento *</label><input type="date" class="form-input" id="ff-birth" value="'+esc(rec.birthDate)+'"></div>'
+    + '<div class="form-group"><label class="form-label">Nacionalidade</label><input type="text" class="form-input" id="ff-nat" value="'+esc(rec.nationality||'Brasileiro')+'" maxlength="50"></div>'
+    + '</div><div class="form-row">'
+    + '<div class="form-group"><label class="form-label">Profissão</label><input type="text" class="form-input" id="ff-prof" value="'+esc(rec.profession)+'" maxlength="100"></div>'
+    + '<div class="form-group"><label class="form-label">Finalidade</label><select class="form-select" id="ff-purpose">'+opt(PURPOSES,rec.purpose||'')+'</select></div>'
+    + '</div><hr style="border-color:var(--border);margin:14px 0"><div class="form-row">'
+    + '<div class="form-group" style="flex:2"><label class="form-label">Logradouro *</label><input type="text" class="form-input" id="ff-street" value="'+esc(rec.addressStreet)+'" maxlength="200"></div>'
+    + '<div class="form-group"><label class="form-label">Número</label><input type="text" class="form-input" id="ff-num" value="'+esc(rec.addressNumber)+'" maxlength="20"></div>'
+    + '</div><div class="form-row">'
+    + '<div class="form-group"><label class="form-label">Cidade *</label><input type="text" class="form-input" id="ff-city" value="'+esc(rec.addressCity)+'" maxlength="100"></div>'
+    + '<div class="form-group"><label class="form-label">UF *</label><input type="text" class="form-input" id="ff-state" value="'+esc(rec.addressState)+'" maxlength="2" style="text-transform:uppercase"></div>'
+    + '</div><div class="form-row">'
+    + '<div class="form-group"><label class="form-label">CEP</label><input type="text" class="form-input" id="ff-zip" value="'+esc(rec.addressZipcode)+'" maxlength="10"></div>'
+    + '<div class="form-group"><label class="form-label">País</label><input type="text" class="form-input" id="ff-country" value="'+esc(rec.addressCountry||'Brasil')+'" maxlength="50"></div>'
+    + '</div><hr style="border-color:var(--border);margin:14px 0"><div class="form-row">'
+    + '<div class="form-group"><label class="form-label">Chegada *</label><input type="date" class="form-input" id="ff-arr" value="'+esc(rec.arrivalDate)+'"></div>'
+    + '<div class="form-group"><label class="form-label">Saída *</label><input type="date" class="form-input" id="ff-dep" value="'+esc(rec.departureDate)+'"></div>'
+    + '</div><div class="form-row">'
+    + '<div class="form-group"><label class="form-label">Cidade origem</label><input type="text" class="form-input" id="ff-orig" value="'+esc(rec.originCity)+'" maxlength="100"></div>'
+    + '<div class="form-group"><label class="form-label">Cidade destino</label><input type="text" class="form-input" id="ff-dest" value="'+esc(rec.destinationCity)+'" maxlength="100"></div>'
+    + '</div><div class="form-row">'
+    + '<div class="form-group"><label class="form-label">Transporte</label><select class="form-select" id="ff-transp">'+opt(TRANSPORTS,rec.transportMethod||'')+'</select></div>'
+    + '<div class="form-group"><label class="form-label">Placa/nº</label><input type="text" class="form-input" id="ff-lic" value="'+esc(rec.transportLicense)+'" maxlength="20"></div>'
+    + '</div>'
+    + (rec.id ? '<input type="hidden" id="ff-id" value="'+rec.id+'">' : '<div class="form-row"><div class="form-group"><label class="form-label">guestId *</label><input type="text" class="form-input" id="ff-guestId" value="'+esc(rec.guestId)+'" placeholder="UUID do hóspede"></div><div class="form-group"><label class="form-label">stayId *</label><input type="text" class="form-input" id="ff-stayId" value="'+esc(rec.stayId)+'" placeholder="UUID da hospedagem"></div></div>')
+    + '<div class="modal-footer" style="padding:16px 0 0;border-top:1px solid var(--border);margin-top:16px;display:flex;justify-content:flex-end;gap:8px">'
+    + '<button class="btn btn-ghost" onclick="document.getElementById(\'fnrhModal\').classList.remove(\'active\')">Cancelar</button>'
+    + '<button class="btn btn-primary" onclick="saveFNRH()">Salvar</button></div>';
+}
+
+function esc(v) { return v ? String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;') : ''; }
+
+function fv(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; }
+
+async function saveFNRH() {
+  var id = fv('ff-id');
+  var body = { fullName:fv('ff-name'), documentType:fv('ff-dtype'), documentNumber:fv('ff-dnum'),
+    birthDate:fv('ff-birth'), nationality:fv('ff-nat')||'Brasileiro', gender:fv('ff-gender')||null,
+    profession:fv('ff-prof')||null, purpose:fv('ff-purpose')||null,
+    addressStreet:fv('ff-street'), addressNumber:fv('ff-num')||null,
+    addressCity:fv('ff-city'), addressState:fv('ff-state').toUpperCase(),
+    addressZipcode:fv('ff-zip')||null, addressCountry:fv('ff-country')||'Brasil',
+    arrivalDate:fv('ff-arr'), departureDate:fv('ff-dep'),
+    originCity:fv('ff-orig')||null, destinationCity:fv('ff-dest')||null,
+    transportMethod:fv('ff-transp')||null, transportLicense:fv('ff-lic')||null };
+  if (!body.fullName) return toast('Nome obrigatório', 'error');
+  if (!body.documentNumber) return toast('Número do documento obrigatório', 'error');
+  if (!body.birthDate) return toast('Data de nascimento obrigatória', 'error');
+  if (!body.addressStreet || !body.addressCity || !body.addressState) return toast('Endereço incompleto', 'error');
+  if (!body.arrivalDate || !body.departureDate) return toast('Datas de chegada/saída obrigatórias', 'error');
+  if (!id) { body.guestId = fv('ff-guestId'); body.stayId = fv('ff-stayId'); if (!body.guestId || !body.stayId) return toast('guestId e stayId obrigatórios', 'error'); }
+  try {
+    if (id) { await api('/api/hotels/'+state.hotelId+'/fnrh/'+id, {method:'PUT', body:JSON.stringify(body)}); toast('Registro atualizado', 'success'); }
+    else     { await api('/api/hotels/'+state.hotelId+'/fnrh', {method:'POST', body:JSON.stringify(body)}); toast('Registro criado', 'success'); }
+    $('fnrhModal').classList.remove('active');
+    fetchFNRH();
+  } catch(e) { toast('Erro: ' + e.message, 'error'); }
+}
+
+async function exportFNRH() {
+  var month = $('fnrhMonth').value;
+  var url = '/api/hotels/'+state.hotelId+'/fnrh/export' + (month ? '?month='+month : '');
+  try {
+    var res = await fetch(url, {headers:{'Authorization':'Bearer '+state.token}});
+    if (!res.ok) { var d = await res.json(); throw new Error(d.error || 'Erro'); }
+    var blob = await res.blob();
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = month ? 'fnrh_'+month.replace('-','')+'.txt' : 'fnrh_export.txt';
+    a.click();
+    toast('Arquivo exportado com sucesso', 'success');
+    fetchFNRH();
+  } catch(e) { toast('Erro na exportação: ' + e.message, 'error'); }
+}
+
+// ===== RELATÓRIOS =====
+function setPreset(days) {
+  var to = new Date(), from = new Date(to - days * 86400000);
+  $('reportTo').value   = to.toISOString().split('T')[0];
+  $('reportFrom').value = from.toISOString().split('T')[0];
+}
+
+function initReports() {
+  if (!$('reportFrom').value) setPreset(30);
+}
+
+function kpiCard(label, val, cls, delta) {
+  return el('div', {class:'kpi-card'}, [
+    el('div', {class:'kpi-label', text:label}),
+    el('div', {class:'kpi-value '+(cls||''), text:String(val)}),
+    delta != null ? el('div', {class:'kpi-delta '+(delta>=0?'up':'down'), text:(delta>=0?'▲ +':'▼ ')+delta+' vs período anterior'}) : null
+  ].filter(Boolean));
+}
+
+function simpleTable(headers, rows) {
+  var t = el('table', {class:'data-table'});
+  var th = el('thead'); th.appendChild(el('tr',{},headers.map(function(h){return el('th',{text:h});}))); t.appendChild(th);
+  var tb = el('tbody');
+  rows.forEach(function(row){ tb.appendChild(el('tr',{},row.map(function(c){return el('td',{text:String(c||'—')});}))); });
+  t.appendChild(tb); return t;
+}
+
+async function loadReport() {
+  var from = $('reportFrom').value, to = $('reportTo').value;
+  if (!from || !to) return toast('Defina o período', 'error');
+  var active = document.querySelector('#reportsTabs .tab-btn.active');
+  var tab = active ? active.dataset.tab : 'rep-occ';
+  var base = '/api/hotels/'+state.hotelId+'/reports/';
+  var suffix = '?from='+from+'&to='+to;
+  try {
+    if (tab==='rep-occ')    renderRepOcc(await api(base+'occupancy'+suffix));
+    if (tab==='rep-rev')    renderRepRev(await api(base+'revenue'+suffix));
+    if (tab==='rep-guests') renderRepGuests(await api(base+'guests'+suffix));
+    if (tab==='rep-staff')  renderRepStaff(await api(base+'staff-performance'+suffix));
+    if (tab==='rep-fin')    renderRepFin(await api(base+'financial'+suffix));
+  } catch(e) { toast('Erro ao carregar relatório: ' + e.message, 'error'); }
+}
+
+function renderRepOcc(d) {
+  var c = $('repOccContent'); clear(c);
+  var g = el('div',{class:'kpi-grid'});
+  g.appendChild(kpiCard('Taxa de ocupação', d.occupancyRate+'%', 'blue', d.comparison.change));
+  g.appendChild(kpiCard('Noites ocupadas', d.occupiedRoomNights));
+  g.appendChild(kpiCard('Quartos', d.totalRooms));
+  g.appendChild(kpiCard('Noites disponíveis', d.availableRoomNights));
+  c.appendChild(g);
+  var w = el('div',{class:'chart-wrap'});
+  w.appendChild(el('h4',{style:'font-size:13px;font-weight:600;margin-bottom:12px',text:'Ocupação diária'}));
+  w.appendChild(simpleTable(['Data','Ocupados','Total','Taxa'],
+    d.byDay.map(function(x){return[fmtBR(x.date),x.occupiedRooms,x.availableRooms,x.rate+'%'];})));
+  c.appendChild(w);
+}
+
+function renderRepRev(d) {
+  var c = $('repRevContent'); clear(c);
+  var g = el('div',{class:'kpi-grid'});
+  g.appendChild(kpiCard('Receita total','R$ '+d.totalRevenue.toFixed(2),'green'));
+  g.appendChild(kpiCard('ADR','R$ '+d.averageDailyRate.toFixed(2)));
+  g.appendChild(kpiCard('RevPAR','R$ '+d.revPAR.toFixed(2)));
+  c.appendChild(g);
+  if (Object.keys(d.byPaymentMethod).length) {
+    var w1=el('div',{class:'chart-wrap',style:'margin-bottom:16px'});
+    w1.appendChild(el('h4',{style:'font-size:13px;font-weight:600;margin-bottom:12px',text:'Por forma de pagamento'}));
+    w1.appendChild(simpleTable(['Método','Receita'],Object.entries(d.byPaymentMethod).map(function(e){return[e[0],'R$ '+e[1].toFixed(2)];})));
+    c.appendChild(w1);
+  }
+  if (Object.keys(d.byRoomType).length) {
+    var w2=el('div',{class:'chart-wrap',style:'margin-bottom:16px'});
+    w2.appendChild(el('h4',{style:'font-size:13px;font-weight:600;margin-bottom:12px',text:'Por tipo de quarto'}));
+    w2.appendChild(simpleTable(['Tipo','Receita'],Object.entries(d.byRoomType).map(function(e){return[e[0],'R$ '+e[1].toFixed(2)];})));
+    c.appendChild(w2);
+  }
+  if (d.byDay.length) {
+    var w3=el('div',{class:'chart-wrap'});
+    w3.appendChild(el('h4',{style:'font-size:13px;font-weight:600;margin-bottom:12px',text:'Receita diária'}));
+    w3.appendChild(simpleTable(['Data','Receita'],d.byDay.map(function(x){return[fmtBR(x.date),'R$ '+x.revenue.toFixed(2)];})));
+    c.appendChild(w3);
+  }
+}
+
+function renderRepGuests(d) {
+  var c = $('repGuestsContent'); clear(c);
+  var g = el('div',{class:'kpi-grid'});
+  g.appendChild(kpiCard('Hóspedes únicos', d.totalGuests, 'blue'));
+  g.appendChild(kpiCard('Estada média', d.averageStayDuration+' noites'));
+  g.appendChild(kpiCard('Hóspedes VIP', d.vipGuests));
+  c.appendChild(g);
+  function objWrap(title, obj) {
+    var e = Object.entries(obj).filter(function(x){return x[1]>0;});
+    if (!e.length) return null;
+    var w=el('div',{class:'chart-wrap',style:'margin-bottom:12px'});
+    w.appendChild(el('h4',{style:'font-size:13px;font-weight:600;margin-bottom:12px',text:title}));
+    w.appendChild(simpleTable(['','Qtd'],e.sort(function(a,b){return b[1]-a[1];})));
+    return w;
+  }
+  [objWrap('Por nacionalidade',d.byNationality), objWrap('Por estado de origem',d.byOriginState),
+   objWrap('Por faixa etária',d.byAgeRange), objWrap('Por finalidade',d.byPurpose)]
+  .filter(Boolean).forEach(function(w){c.appendChild(w);});
+}
+
+function renderRepStaff(d) {
+  var c = $('repStaffContent'); clear(c);
+  var w = el('div',{class:'chart-wrap'});
+  w.appendChild(el('h4',{style:'font-size:13px;font-weight:600;margin-bottom:12px',text:'Performance por faxineira'}));
+  if (!d.staff.length) { w.appendChild(el('div',{class:'empty',text:'Sem dados no período'})); }
+  else w.appendChild(simpleTable(['Faxineira','Tarefas','Tempo médio','Nota','Aprovação'],
+    d.staff.map(function(s){return[s.name,s.tasksCompleted,
+      s.averageMinutes?s.averageMinutes+'min':'—', s.inspectionScore!=null?s.inspectionScore+'/5':'—',
+      s.passRate!=null?s.passRate+'%':'—'];})));
+  c.appendChild(w);
+}
+
+function renderRepFin(d) {
+  var c = $('repFinContent'); clear(c);
+  var g = el('div',{class:'kpi-grid'});
+  g.appendChild(kpiCard('Receita','R$ '+d.revenue.toFixed(2),'green',d.comparison.revenueChange));
+  g.appendChild(kpiCard('Ticket médio','R$ '+d.averageTicket.toFixed(2)));
+  g.appendChild(kpiCard('Ocupação',d.occupancyRate+'%','blue',d.comparison.occupancyChange));
+  g.appendChild(kpiCard('ADR','R$ '+d.ADR.toFixed(2)));
+  g.appendChild(kpiCard('RevPAR','R$ '+d.revPAR.toFixed(2)));
+  c.appendChild(g);
+  var prev = d.comparison;
+  var w = el('div',{class:'chart-wrap'});
+  w.appendChild(el('h4',{style:'font-size:13px;font-weight:600;margin-bottom:12px',text:'Comparativo com período anterior'}));
+  w.appendChild(simpleTable(['Métrica','Atual','Anterior','Variação'],[
+    ['Receita','R$ '+d.revenue.toFixed(2),'R$ '+prev.previousRevenue.toFixed(2),(prev.revenueChange>=0?'+':'')+prev.revenueChange.toFixed(2)],
+    ['Ocupação',d.occupancyRate+'%',prev.previousOccRate+'%',(prev.occupancyChange>=0?'+':'')+prev.occupancyChange.toFixed(2)+'%']
+  ]));
+  c.appendChild(w);
+}
+
 function switchPage(pageName) {
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
   $('page-' + pageName).classList.add('active');
   document.querySelector('.nav-item[data-page="' + pageName + '"]').classList.add('active');
   if (pageName === 'dashboard') { loadDashboard(); loadRooms(); }
-  if (pageName === 'rooms') loadRooms();
-  if (pageName === 'guests') loadGuests();
+  if (pageName === 'rooms')    loadRooms();
+  if (pageName === 'guests')   loadGuests();
   if (pageName === 'checkin' || pageName === 'checkout') loadRooms();
+  if (pageName === 'gov')     { loadGov(); }
+  if (pageName === 'tariff')  { loadTariff(); }
+  if (pageName === 'fnrh')    { loadFNRH(); }
+  if (pageName === 'reports') { initReports(); }
   $('sidebar').classList.remove('open');
 }
 
@@ -573,6 +1425,54 @@ document.addEventListener('DOMContentLoaded', function() {
   $('modalClose').addEventListener('click', function() { $('modalOverlay').classList.remove('active'); });
   $('modalOverlay').addEventListener('click', function(e) { if (e.target.id === 'modalOverlay') $('modalOverlay').classList.remove('active'); });
   $('mobileMenuBtn').addEventListener('click', function() { $('sidebar').classList.toggle('open'); });
+
+  // Tabs genéricos
+  ['govTabs','tariffTabs','reportsTabs'].forEach(function(id) { initTabs(id); });
+
+  // Governança
+  $('newStaffBtn').addEventListener('click', function(){openStaffModal(null);});
+  $('staffModalClose').addEventListener('click', function(){$('staffModal').classList.remove('active');});
+  $('staffModalCancel').addEventListener('click', function(){$('staffModal').classList.remove('active');});
+  $('staffModalSave').addEventListener('click', saveStaff);
+  $('generateDailyBtn').addEventListener('click', generateDaily);
+  $('newTaskBtn').addEventListener('click', openTaskModal);
+  $('taskModalClose').addEventListener('click', function(){$('taskModal').classList.remove('active');});
+  $('taskModalCancel').addEventListener('click', function(){$('taskModal').classList.remove('active');});
+  $('taskModalSave').addEventListener('click', saveTask);
+  $('taskStatusFilter').addEventListener('change', loadGovTasks);
+  $('taskTodayFilter').addEventListener('change', loadGovTasks);
+  $('inspectModalClose').addEventListener('click', function(){$('inspectModal').classList.remove('active');});
+  $('inspectPassBtn').addEventListener('click', function(){submitInspect(true);});
+  $('inspectFailBtn').addEventListener('click', function(){submitInspect(false);});
+
+  // Tarifário
+  $('newSeasonBtn').addEventListener('click', function(){openSeasonModal(null);});
+  $('seasonModalClose').addEventListener('click', function(){$('seasonModal').classList.remove('active');});
+  $('seasonModalCancel').addEventListener('click', function(){$('seasonModal').classList.remove('active');});
+  $('seasonModalSave').addEventListener('click', saveSeason);
+  $('saveWeekdayBtn').addEventListener('click', saveWeekday);
+  $('calcBtn').addEventListener('click', calcTariff);
+
+  // FNRH
+  $('exportFnrhBtn').addEventListener('click', exportFNRH);
+  $('newFnrhBtn').addEventListener('click', function(){openFNRHModal(null);});
+  $('fnrhModalClose').addEventListener('click', function(){$('fnrhModal').classList.remove('active');});
+  $('fnrhSearchBtn').addEventListener('click', function(){fnrhPage=1; fetchFNRH();});
+
+  // Relatórios
+  $('loadReportBtn').addEventListener('click', loadReport);
+  $('preset7').addEventListener('click',  function(){setPreset(7);  loadReport();});
+  $('preset30').addEventListener('click', function(){setPreset(30); loadReport();});
+  $('preset90').addEventListener('click', function(){setPreset(90); loadReport();});
+  // Troca de tab em relatórios carrega o tab ativo
+  $('reportsTabs').querySelectorAll('.tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() { setTimeout(loadReport, 50); });
+  });
+
+  // Fechar modais clicando no overlay
+  ['staffModal','taskModal','inspectModal','seasonModal','fnrhModal'].forEach(function(id) {
+    $(id).addEventListener('click', function(e) { if (e.target.id === id) $(id).classList.remove('active'); });
+  });
 
   const token = sessionStorage.getItem('lobby_token');
   const userStr = sessionStorage.getItem('lobby_user');
