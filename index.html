@@ -738,7 +738,7 @@ async function performCheckin() {
   try {
     const guest = await api('/api/hotels/' + state.hotelId + '/guests', { method: 'POST', body: JSON.stringify({ cpf: cpf, name: name, email: email || null, phone: phone }) });
     const room = state.rooms.find(function(r) { return r.id === roomId; });
-    await api('/api/hotels/' + state.hotelId + '/stays', { method: 'POST', body: JSON.stringify({ guestId: guest.id, roomId: roomId, numberOfNights: nights, dailyRate: parseFloat(room.dailyRate) }) });
+    await api('/api/hotels/' + state.hotelId + '/stays', { method: 'POST', body: JSON.stringify({ guestId: guest.id, roomId: roomId, numberOfNights: nights }) });
     toast('Check-in realizado · Quarto ' + room.roomNumber, 'success');
     ['cpf','guestName','guestEmail','guestPhone'].forEach(function(id) { $(id).value = ''; });
     $('nights').value = '1';

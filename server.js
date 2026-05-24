@@ -337,8 +337,8 @@ const WeekdaySchema = z.object({
   '6': z.number().min(0.5).max(3.0),
 });
 
-// Schema FNRH — validações cruzadas via superRefine
-const FNRHSchema = z.object({
+// Schema base FNRH (ZodObject — suporta .partial())
+const FNRHObjectBase = z.object({
   guestId:              z.string().uuid(),
   stayId:               z.string().uuid(),
   fullName:             z.string().min(3).max(200),
@@ -365,20 +365,23 @@ const FNRHSchema = z.object({
   originCity:           z.string().max(100).optional().nullable(),
   destinationCity:      z.string().max(100).optional().nullable(),
   purpose:              z.enum(['turismo','negocios','evento','saude','estudo','outro']).optional().nullable(),
-}).superRefine((d, ctx) => {
-  // CPF: valida dígitos verificadores
-  if (d.documentType === 'CPF' && !validateCPFDoc(d.documentNumber))
-    ctx.addIssue({ code: 'custom', path: ['documentNumber'], message: 'CPF inválido' });
-  // birthDate não pode ser futura
-  if (new Date(d.birthDate) > new Date())
-    ctx.addIssue({ code: 'custom', path: ['birthDate'], message: 'Data de nascimento não pode ser futura' });
-  // arrivalDate < departureDate
-  if (d.arrivalDate >= d.departureDate)
-    ctx.addIssue({ code: 'custom', path: ['departureDate'], message: 'Data de saída deve ser após a chegada' });
-  // UF válida
-  if (!VALID_UFS.has(d.addressState.toUpperCase()))
-    ctx.addIssue({ code: 'custom', path: ['addressState'], message: 'UF inválida' });
 });
+
+// Refinamentos FNRH — aplicados com null-guards para suportar updates parciais
+function fnrhRefine(d, ctx) {
+  if (d.documentType === 'CPF' && d.documentNumber && !validateCPFDoc(d.documentNumber))
+    ctx.addIssue({ code: 'custom', path: ['documentNumber'], message: 'CPF inválido' });
+  if (d.birthDate && new Date(d.birthDate) > new Date())
+    ctx.addIssue({ code: 'custom', path: ['birthDate'], message: 'Data de nascimento não pode ser futura' });
+  if (d.arrivalDate && d.departureDate && d.arrivalDate >= d.departureDate)
+    ctx.addIssue({ code: 'custom', path: ['departureDate'], message: 'Data de saída deve ser após a chegada' });
+  if (d.addressState && !VALID_UFS.has(d.addressState.toUpperCase()))
+    ctx.addIssue({ code: 'custom', path: ['addressState'], message: 'UF inválida' });
+}
+
+// Schema para criação (todos os campos obrigatórios) + Schema para update parcial
+const FNRHSchema        = FNRHObjectBase.superRefine(fnrhRefine);
+const FNRHPartialSchema = FNRHObjectBase.partial().superRefine(fnrhRefine);
 
 // ============ MIDDLEWARE: ENFORCE HOTEL OWNERSHIP ============
 function enforceHotelOwnership(req, res, next) {
@@ -1318,7 +1321,17 @@ app.put('/api/hotels/:hotelId/fnrh/:recordId', verifyToken, enforceHotelOwnershi
     if (record.exportedToSismatur)
       return res.status(400).json({ error: 'Registro já exportado não pode ser editado', code: 'ALREADY_EXPORTED' });
 
-    const updates = FNRHSchema.partial().parse(req.body);
+    const updates = FNRHPartialSchema.parse(req.body);
+    // Se stayId ou guestId for alterado, revalida o par
+    const newStayId   = updates.stayId   || record.stayId;
+    const newGuestId  = updates.guestId  || record.guestId;
+    if (updates.stayId || updates.guestId) {
+      const stay = DB.stays.get(newStayId);
+      if (!stay || stay.hotelId !== req.params.hotelId)
+        return res.status(404).json({ error: 'Hospedagem não encontrada', code: 'NOT_FOUND' });
+      if (stay.guestId !== newGuestId)
+        return res.status(422).json({ error: 'Hóspede não corresponde à hospedagem', code: 'GUEST_STAY_MISMATCH' });
+    }
     Object.assign(record, updates, { updatedAt: new Date().toISOString() });
     res.json(record);
   } catch (err) {
@@ -1362,8 +1375,10 @@ app.get('/api/hotels/:hotelId/fnrh/export', verifyToken, enforceHotelOwnership, 
   const now = new Date().toISOString();
   records.forEach(r => { r.exportedToSismatur = true; r.exportedAt = now; });
 
-  const filename = month
-    ? `fnrh_${month.replace('-','')}.txt`
+  // Sanitiza month para uso seguro no nome de arquivo (apenas dígitos e hífens)
+  const safeMonth = month ? month.replace(/[^0-9-]/g, '').replace('-', '') : null;
+  const filename = safeMonth
+    ? `fnrh_${safeMonth}.txt`
     : `fnrh_${new Date().toISOString().slice(0,7).replace('-','')}.txt`;
 
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
