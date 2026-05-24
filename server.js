@@ -24,16 +24,19 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc:  ["'self'"],
-      scriptSrc:   ["'self'"],
-      styleSrc:    ["'self'", "'unsafe-inline'"], // necessário para estilos inline do SPA
-      imgSrc:      ["'self'", 'data:'],
-      connectSrc:  ["'self'"],
+      // 'unsafe-inline' necessário: todo o JS está inline em index.html e cleaning-app.html (SPA single-file).
+      // A proteção contra XSS vem do uso consistente de DOM API + função esc() — não do CSP script-src.
+      scriptSrc:   ["'self'", "'unsafe-inline'"],
+      styleSrc:    ["'self'", "'unsafe-inline'"],
+      // Permite que a cleaning-app.html (pode rodar em outro domínio) chame a API do Render
+      imgSrc:      ["'self'", 'data:', 'https://lobby-backend-tp84.onrender.com'],
+      connectSrc:  ["'self'", 'https://lobby-backend-tp84.onrender.com'],
       fontSrc:     ["'self'"],
       objectSrc:   ["'none'"],
       frameSrc:    ["'none'"],
     },
   },
-  crossOriginResourcePolicy: { policy: 'same-origin' },
+  crossOriginResourcePolicy: { policy: 'cross-origin' }, // permite assets serem carregados por outros domínios
 }));
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:10000')
@@ -131,9 +134,9 @@ DB.rooms.get(roomIds['201']).status = 'occupied';
 
 // Seed: faxineiras demo
 const staffDefs = [
-  ['Ana Lima',      '11988880001', '1234'],
-  ['Beatriz Costa', '11988880002', '5678'],
-  ['Carla Mendes',  '11988880003', '9012'],
+  ['Ana Lima',      '11988880001', '123456'],
+  ['Beatriz Costa', '11988880002', '567890'],
+  ['Carla Mendes',  '11988880003', '901234'],
 ];
 const staffIds = [];
 for (const [name, phone, pin] of staffDefs) {
@@ -854,10 +857,25 @@ app.post('/api/cleaning/auth/login', loginLimiter, async (req, res) => {
 // Minhas tarefas (app da faxineira)
 app.get('/api/cleaning/my-tasks', verifyStaffToken, (req, res) => {
   const priorityOrder = { urgent: 0, high: 1, normal: 2, low: 3 };
-  const tasks = find('cleaning_tasks', t =>
-    t.assignedTo === req.staff.id && ['pending','in_progress'].includes(t.status)
-  )
-  .sort((a, b) => (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9))
+  const todayPrefix   = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+
+  const tasks = find('cleaning_tasks', t => {
+    if (t.assignedTo !== req.staff.id) return false;
+    if (['pending', 'in_progress'].includes(t.status)) return true;
+    // inclui done/inspected de hoje para o contador de concluídos
+    if (['done', 'inspected'].includes(t.status)) {
+      const ts = t.completedAt || t.inspectedAt || '';
+      return ts.startsWith(todayPrefix);
+    }
+    return false;
+  })
+  .sort((a, b) => {
+    // pendentes primeiro, depois por prioridade
+    const statusWeight = s => ({ pending: 0, in_progress: 1, done: 2, inspected: 3 }[s] ?? 9);
+    const sw = statusWeight(a.status) - statusWeight(b.status);
+    if (sw !== 0) return sw;
+    return (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9);
+  })
   .map(t => ({
     ...t,
     roomNumber: DB.rooms.get(t.roomId)?.roomNumber,
@@ -1386,8 +1404,17 @@ app.get('/api/hotels/:hotelId/fnrh/export', verifyToken, enforceHotelOwnership, 
   res.send(lines.join('\n'));
 });
 
-// ============ ROOT ============
+// ============ ROOT & STATIC ============
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/cleaning-app.html', (req, res) => res.sendFile(path.join(__dirname, 'cleaning-app.html')));
+app.get('/manifest.json', (req, res) => res.sendFile(path.join(__dirname, 'manifest.json')));
+app.get('/icon-192.png', (req, res) => res.sendFile(path.join(__dirname, 'icon-192.png')));
+app.get('/icon-512.png', (req, res) => res.sendFile(path.join(__dirname, 'icon-512.png')));
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Service-Worker-Allowed', '/');
+  res.sendFile(path.join(__dirname, 'sw.js'));
+});
 app.get('/api/status', (req, res) => res.json({ name: 'LOBBY Backend', status: 'running', mode: 'demo' }));
 
 // ============ SERVER START ============

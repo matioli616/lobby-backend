@@ -1,0 +1,25 @@
+{
+  "name": "LOBBY Limpeza",
+  "short_name": "LOBBY",
+  "description": "App de tarefas de limpeza para a equipe LOBBY",
+  "start_url": "/cleaning-app.html",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#3B82F6",
+  "icons": [
+    {
+      "src": "https://lobby-backend-tp84.onrender.com/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://lobby-backend-tp84.onrender.com/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

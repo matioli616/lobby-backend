@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#3B82F6" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="LOBBY" />
+  <link rel="manifest" href="/manifest.json" />
+  <title>LOBBY Limpeza</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 16px;
+      background: #F8FAFC;
+      color: #1E293B;
+      min-height: 100vh;
+    }
+
+    /* ── SCREENS ─────────────────────────────────── */
+    .screen { display: none; min-height: 100vh; }
+    .screen.active { display: flex; flex-direction: column; }
+
+    /* ── SCREEN 1: LOGIN ─────────────────────────── */
+    #screen-login {
+      align-items: center;
+      justify-content: center;
+      padding: 40px 24px;
+      background: #fff;
+    }
+    .login-logo {
+      font-size: 44px;
+      font-weight: 800;
+      color: #3B82F6;
+      letter-spacing: -2px;
+      margin-bottom: 6px;
+    }
+    .login-subtitle {
+      font-size: 16px;
+      color: #64748B;
+      margin-bottom: 36px;
+      text-align: center;
+    }
+    .login-staff-name {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1E293B;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+    .pin-label {
+      font-size: 16px;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+    .pin-inputs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 32px;
+      justify-content: center;
+    }
+    .pin-input {
+      width: 48px;
+      height: 60px;
+      font-size: 26px;
+      text-align: center;
+      border: 2px solid #CBD5E1;
+      border-radius: 12px;
+      background: #F8FAFC;
+      color: #1E293B;
+      outline: none;
+      transition: border-color .15s, background .15s;
+    }
+    .pin-input:focus  { border-color: #3B82F6; background: #EFF6FF; }
+    .pin-input.filled { border-color: #3B82F6; }
+    .btn-primary {
+      width: 100%;
+      max-width: 320px;
+      height: 54px;
+      font-size: 17px;
+      font-weight: 700;
+      background: #3B82F6;
+      color: #fff;
+      border: none;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: background .15s, transform .1s;
+    }
+    .btn-primary:active  { background: #2563EB; transform: scale(.98); }
+    .btn-primary:disabled { background: #93C5FD; cursor: not-allowed; transform: none; }
+    .login-error {
+      margin-top: 16px;
+      font-size: 15px;
+      color: #EF4444;
+      text-align: center;
+      min-height: 22px;
+    }
+
+    /* ── SCREEN 2: TASKS ─────────────────────────── */
+    #screen-tasks { background: #F8FAFC; }
+    .tasks-header {
+      background: #3B82F6;
+      color: #fff;
+      padding: 20px 20px 16px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .tasks-greeting { font-size: 20px; font-weight: 800; }
+    .tasks-date     { font-size: 14px; opacity: .85; margin-top: 2px; }
+    .tasks-stats    { display: flex; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+    .stat-badge {
+      background: rgba(255,255,255,.2);
+      border-radius: 20px;
+      padding: 5px 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .tasks-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+    }
+    .task-card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 14px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      border-left: 5px solid #CBD5E1;
+    }
+    .task-card.priority-urgent   { border-left-color: #EF4444; }
+    .task-card.priority-high     { border-left-color: #F97316; }
+    .task-card.priority-normal   { border-left-color: #3B82F6; }
+    .task-card.priority-low      { border-left-color: #94A3B8; }
+    .task-card.status-in_progress { background: #FFFBEB; }
+    .task-card.status-done,
+    .task-card.status-inspected  { opacity: .6; }
+    .task-card-top {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .task-room {
+      font-size: 32px;
+      font-weight: 800;
+      color: #1E293B;
+      min-width: 70px;
+    }
+    .task-badges  { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; }
+    .badge {
+      font-size: 13px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 20px;
+    }
+    .badge-urgent  { background: #FEE2E2; color: #DC2626; }
+    .badge-high    { background: #FFEDD5; color: #C2410C; }
+    .badge-normal  { background: #DBEAFE; color: #1D4ED8; }
+    .badge-low     { background: #F1F5F9; color: #64748B; }
+    .badge-type    { background: #F1F5F9; color: #475569; }
+    .badge-in_progress { background: #FEF3C7; color: #92400E; }
+    .badge-done        { background: #D1FAE5; color: #065F46; }
+    .task-time  { font-size: 14px; color: #64748B; margin-bottom: 10px; }
+    .task-notes { font-size: 14px; color: #475569; margin-bottom: 10px; font-style: italic; }
+    .task-actions { display: flex; gap: 10px; }
+    .btn-start {
+      flex: 1;
+      height: 50px;
+      font-size: 16px;
+      font-weight: 700;
+      background: #3B82F6;
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-start:active { background: #2563EB; }
+    .btn-done {
+      flex: 1;
+      height: 50px;
+      font-size: 16px;
+      font-weight: 700;
+      background: #10B981;
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-done:active { background: #059669; }
+    .empty-state { text-align: center; padding: 60px 20px; color: #94A3B8; }
+    .empty-state .emoji { font-size: 60px; margin-bottom: 16px; }
+    .empty-state p     { font-size: 18px; font-weight: 600; color: #64748B; }
+    .empty-state small { font-size: 15px; }
+    .tasks-footer {
+      padding: 12px 16px;
+      display: flex;
+      gap: 10px;
+      border-top: 1px solid #E2E8F0;
+      background: #fff;
+      padding-bottom: max(12px, env(safe-area-inset-bottom));
+    }
+    .btn-logout {
+      height: 48px;
+      padding: 0 20px;
+      font-size: 15px;
+      font-weight: 600;
+      background: #FEE2E2;
+      color: #EF4444;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+    }
+    .btn-refresh {
+      flex: 1;
+      height: 48px;
+      font-size: 15px;
+      font-weight: 600;
+      background: #EFF6FF;
+      color: #3B82F6;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+    }
+    .btn-refresh:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── MODAL: COMPLETION ───────────────────────── */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(15,23,42,.5);
+      z-index: 100;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-sheet {
+      background: #fff;
+      border-radius: 24px 24px 0 0;
+      padding: 20px 20px 32px;
+      width: 100%;
+      max-width: 480px;
+      animation: slideUp .25s ease-out;
+      padding-bottom: max(32px, env(safe-area-inset-bottom));
+    }
+    @keyframes slideUp {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+    .modal-handle {
+      width: 40px; height: 4px;
+      background: #CBD5E1;
+      border-radius: 2px;
+      margin: 0 auto 20px;
+    }
+    .modal-title { font-size: 20px; font-weight: 800; color: #1E293B; margin-bottom: 4px; }
+    .modal-room  { font-size: 32px; font-weight: 800; color: #3B82F6; margin-bottom: 20px; }
+    .modal-label {
+      display: block;
+      font-size: 15px;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 8px;
+    }
+    .modal-textarea {
+      width: 100%;
+      min-height: 96px;
+      font-size: 16px;
+      padding: 12px 14px;
+      border: 2px solid #E2E8F0;
+      border-radius: 12px;
+      resize: vertical;
+      outline: none;
+      font-family: inherit;
+      color: #1E293B;
+      background: #F8FAFC;
+      margin-bottom: 16px;
+    }
+    .modal-textarea:focus { border-color: #3B82F6; }
+    .modal-photo-label {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border: 2px dashed #CBD5E1;
+      border-radius: 12px;
+      cursor: pointer;
+      margin-bottom: 20px;
+      background: #F8FAFC;
+      transition: border-color .15s, background .15s;
+    }
+    .modal-photo-label:hover { border-color: #3B82F6; background: #EFF6FF; }
+    .modal-photo-icon  { font-size: 28px; }
+    .modal-photo-text  { font-size: 16px; font-weight: 600; color: #475569; }
+    .modal-photo-small { font-size: 13px; color: #94A3B8; }
+    #photo-input { display: none; }
+    .photo-preview {
+      width: 100%;
+      max-height: 200px;
+      object-fit: cover;
+      border-radius: 12px;
+      margin-bottom: 16px;
+      display: none;
+    }
+    .modal-actions { display: flex; gap: 12px; }
+    .btn-cancel {
+      height: 52px;
+      padding: 0 24px;
+      font-size: 16px;
+      font-weight: 600;
+      background: #F1F5F9;
+      color: #64748B;
+      border: none;
+      border-radius: 14px;
+      cursor: pointer;
+    }
+    .btn-confirm {
+      flex: 1;
+      height: 52px;
+      font-size: 17px;
+      font-weight: 700;
+      background: #10B981;
+      color: #fff;
+      border: none;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-confirm:active   { background: #059669; }
+    .btn-confirm:disabled { background: #6EE7B7; cursor: not-allowed; }
+
+    /* ── LOADING / TOAST ─────────────────────────── */
+    .spinner {
+      display: inline-block;
+      width: 18px; height: 18px;
+      border: 3px solid rgba(255,255,255,.35);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .toast {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%) translateY(120px);
+      background: #1E293B;
+      color: #fff;
+      padding: 12px 24px;
+      border-radius: 30px;
+      font-size: 15px;
+      font-weight: 600;
+      z-index: 200;
+      transition: transform .3s ease;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .toast.show    { transform: translateX(-50%) translateY(0); }
+    .toast.success { background: #10B981; }
+    .toast.error   { background: #EF4444; }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════ SCREEN 1: LOGIN ═══════════════ -->
+<div id="screen-login" class="screen active">
+  <div class="login-logo">LOBBY</div>
+  <div class="login-subtitle">Acesso da equipe de limpeza</div>
+  <div id="login-staff-name" class="login-staff-name" style="display:none"></div>
+  <div class="pin-label">Digite seu PIN de 6 dígitos</div>
+  <div class="pin-inputs" id="pin-inputs">
+    <input class="pin-input" type="password" inputmode="numeric" maxlength="1" autocomplete="off" data-idx="0" />
+    <input class="pin-input" type="password" inputmode="numeric" maxlength="1" autocomplete="off" data-idx="1" />
+    <input class="pin-input" type="password" inputmode="numeric" maxlength="1" autocomplete="off" data-idx="2" />
+    <input class="pin-input" type="password" inputmode="numeric" maxlength="1" autocomplete="off" data-idx="3" />
+    <input class="pin-input" type="password" inputmode="numeric" maxlength="1" autocomplete="off" data-idx="4" />
+    <input class="pin-input" type="password" inputmode="numeric" maxlength="1" autocomplete="off" data-idx="5" />
+  </div>
+  <button class="btn-primary" id="btn-login" onclick="doLogin()">Entrar</button>
+  <div class="login-error" id="login-error"></div>
+</div>
+
+<!-- ═══════════════ SCREEN 2: TASKS ═══════════════ -->
+<div id="screen-tasks" class="screen">
+  <div class="tasks-header">
+    <div class="tasks-greeting" id="tasks-greeting">Olá!</div>
+    <div class="tasks-date"     id="tasks-date"></div>
+    <div class="tasks-stats">
+      <div class="stat-badge" id="stat-pending">⏳ 0 pendentes</div>
+      <div class="stat-badge" id="stat-done">✅ 0 concluídos</div>
+    </div>
+  </div>
+  <div class="tasks-list" id="tasks-list">
+    <div class="empty-state">
+      <div class="emoji">⏳</div>
+      <p>Carregando tarefas…</p>
+    </div>
+  </div>
+  <div class="tasks-footer">
+    <button class="btn-logout" onclick="doLogout()">Sair</button>
+    <button class="btn-refresh" id="btn-refresh" onclick="loadTasks()">🔄 Atualizar</button>
+  </div>
+</div>
+
+<!-- ═══════════════ MODAL: CONCLUIR ═══════════════ -->
+<div class="modal-overlay" id="modal-complete">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Concluir limpeza</div>
+    <div class="modal-room" id="modal-room-display">Quarto —</div>
+
+    <label class="modal-label" for="modal-notes">Observações (opcional)</label>
+    <textarea class="modal-textarea" id="modal-notes"
+      placeholder="Ex.: torneira com vazamento, TV sem controle…"></textarea>
+
+    <label class="modal-photo-label" for="photo-input">
+      <span class="modal-photo-icon">📷</span>
+      <div>
+        <div class="modal-photo-text" id="photo-label-text">Tirar foto do quarto</div>
+        <div class="modal-photo-small">Toque para abrir a câmera</div>
+      </div>
+    </label>
+    <input type="file" id="photo-input" accept="image/*" capture="environment" />
+    <img class="photo-preview" id="photo-preview" alt="Foto do quarto" />
+
+    <div class="modal-actions">
+      <button class="btn-cancel"  onclick="closeModal()">Cancelar</button>
+      <button class="btn-confirm" id="btn-confirm" onclick="confirmComplete()">✅ Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+
+/* ──────────────────────────────────────────────────
+   CONFIG
+────────────────────────────────────────────────── */
+var API_URL       = 'https://lobby-backend-tp84.onrender.com';
+var POLL_INTERVAL = 60000; // ms
+
+/* ──────────────────────────────────────────────────
+   STATE
+────────────────────────────────────────────────── */
+var token         = null;
+var staffId       = null;
+var staffName     = '';
+var tasks         = [];
+var currentTaskId = null;
+var pollTimer     = null;
+var toastTimer    = null;
+
+/* ──────────────────────────────────────────────────
+   INIT
+────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', function () {
+  // staffId: URL param first, then localStorage
+  var params   = new URLSearchParams(window.location.search);
+  var urlStaff = params.get('staff');
+  if (urlStaff) {
+    staffId = urlStaff;
+    localStorage.setItem('lobby_staff_id', staffId);
+    // clean URL
+    history.replaceState({}, '', window.location.pathname);
+  } else {
+    staffId = localStorage.getItem('lobby_staff_id');
+  }
+
+  // Auto-login from stored token
+  var stored = localStorage.getItem('lobby_cleaning_token');
+  if (stored && staffId) {
+    token     = stored;
+    staffName = localStorage.getItem('lobby_cleaning_name') || '';
+    showTasksScreen();
+    loadTasks();
+    return;
+  }
+
+  // Show name hint on login screen
+  var savedName = localStorage.getItem('lobby_cleaning_name');
+  if (savedName) {
+    var nameEl = document.getElementById('login-staff-name');
+    nameEl.textContent = 'Olá, ' + savedName.split(' ')[0] + '!';
+    nameEl.style.display = '';
+  }
+
+  setupPinInputs();
+
+  // Photo preview listener
+  document.getElementById('photo-input').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (ev) {
+      var img = document.getElementById('photo-preview');
+      img.src = ev.target.result;
+      img.style.display = 'block';
+      document.getElementById('photo-label-text').textContent = '✅ Foto selecionada';
+    };
+    reader.readAsDataURL(file);
+  });
+});
+
+/* ──────────────────────────────────────────────────
+   PIN INPUTS
+────────────────────────────────────────────────── */
+function setupPinInputs() {
+  var inputs = document.querySelectorAll('.pin-input');
+  inputs.forEach(function (inp, i) {
+    inp.addEventListener('input', function (e) {
+      var val = e.target.value.replace(/\D/g, '');
+      e.target.value = val.slice(0, 1);
+      e.target.classList.toggle('filled', !!e.target.value);
+      if (e.target.value && i < inputs.length - 1) {
+        inputs[i + 1].focus();
+      }
+      if (getPinValue().length === 6) doLogin();
+    });
+    inp.addEventListener('keydown', function (e) {
+      if (e.key === 'Backspace' && !inp.value && i > 0) {
+        inputs[i - 1].value = '';
+        inputs[i - 1].classList.remove('filled');
+        inputs[i - 1].focus();
+      }
+    });
+  });
+  setTimeout(function () { inputs[0].focus(); }, 100);
+}
+
+function getPinValue() {
+  return Array.from(document.querySelectorAll('.pin-input'))
+    .map(function (i) { return i.value; }).join('');
+}
+
+function clearPin() {
+  document.querySelectorAll('.pin-input').forEach(function (i) {
+    i.value = '';
+    i.classList.remove('filled');
+  });
+  var first = document.querySelector('.pin-input');
+  if (first) setTimeout(function () { first.focus(); }, 50);
+}
+
+/* ──────────────────────────────────────────────────
+   LOGIN
+────────────────────────────────────────────────── */
+async function doLogin() {
+  var pin = getPinValue();
+  if (pin.length !== 6) return;
+
+  var btn = document.getElementById('btn-login');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Entrando…';
+  document.getElementById('login-error').textContent = '';
+
+  try {
+    var resp = await fetch(API_URL + '/api/cleaning/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ staffId: staffId, pin: pin })
+    });
+    var data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'PIN ou ID inválido');
+
+    token     = data.token;
+    staffName = (data.staff && data.staff.name) ? data.staff.name : '';
+    localStorage.setItem('lobby_cleaning_token', token);
+    localStorage.setItem('lobby_cleaning_name',  staffName);
+
+    showTasksScreen();
+    loadTasks();
+  } catch (err) {
+    document.getElementById('login-error').textContent = err.message;
+    clearPin();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Entrar';
+  }
+}
+
+/* ──────────────────────────────────────────────────
+   LOGOUT
+────────────────────────────────────────────────── */
+function doLogout() {
+  token     = null;
+  staffName = '';
+  localStorage.removeItem('lobby_cleaning_token');
+  clearInterval(pollTimer);
+  showLoginScreen();
+}
+
+/* ──────────────────────────────────────────────────
+   SCREENS
+────────────────────────────────────────────────── */
+function showLoginScreen() {
+  document.getElementById('screen-tasks').classList.remove('active');
+  document.getElementById('screen-login').classList.add('active');
+  clearPin();
+  setupPinInputs();
+}
+
+function showTasksScreen() {
+  document.getElementById('screen-login').classList.remove('active');
+  document.getElementById('screen-tasks').classList.add('active');
+
+  var first = staffName ? staffName.split(' ')[0] : '';
+  document.getElementById('tasks-greeting').textContent =
+    first ? 'Olá, ' + first + '! 👋' : 'Olá! 👋';
+
+  setTasksDate();
+  startPolling();
+
+  // Photo listener may not be set yet on first run — bind here too
+  var pi = document.getElementById('photo-input');
+  if (pi && !pi._bound) {
+    pi._bound = true;
+    pi.addEventListener('change', function (e) {
+      var file = e.target.files && e.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function (ev) {
+        var img = document.getElementById('photo-preview');
+        img.src = ev.target.result;
+        img.style.display = 'block';
+        document.getElementById('photo-label-text').textContent = '✅ Foto selecionada';
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+}
+
+function setTasksDate() {
+  var now  = new Date();
+  var opts = { weekday: 'long', day: 'numeric', month: 'long' };
+  var str  = now.toLocaleDateString('pt-BR', opts);
+  str = str.charAt(0).toUpperCase() + str.slice(1);
+  var el = document.getElementById('tasks-date');
+  if (el) el.textContent = str;
+}
+
+/* ──────────────────────────────────────────────────
+   LOAD TASKS
+────────────────────────────────────────────────── */
+async function loadTasks() {
+  var btn = document.getElementById('btn-refresh');
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    var resp = await fetch(API_URL + '/api/cleaning/my-tasks', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (resp.status === 401) { doLogout(); return; }
+    if (!resp.ok) throw new Error('Erro ' + resp.status);
+    var data = await resp.json();
+    tasks = Array.isArray(data) ? data : (data.tasks || []);
+    renderTasks();
+  } catch (err) {
+    showToast('Sem conexão — tente novamente', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Atualizar'; }
+  }
+}
+
+function startPolling() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(loadTasks, POLL_INTERVAL);
+}
+
+/* ──────────────────────────────────────────────────
+   RENDER TASKS
+────────────────────────────────────────────────── */
+function renderTasks() {
+  var list = document.getElementById('tasks-list');
+
+  var active = tasks.filter(function (t) {
+    return t.status === 'pending' || t.status === 'in_progress';
+  });
+  var done = tasks.filter(function (t) {
+    return t.status === 'done' || t.status === 'inspected';
+  });
+
+  document.getElementById('stat-pending').textContent =
+    '⏳ ' + active.length + ' pendente' + (active.length !== 1 ? 's' : '');
+  document.getElementById('stat-done').textContent =
+    '✅ ' + done.length + ' concluído' + (done.length !== 1 ? 's' : '');
+
+  list.innerHTML = '';
+
+  if (tasks.length === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'empty-state';
+    var emojiDiv = document.createElement('div');
+    emojiDiv.className = 'emoji';
+    emojiDiv.textContent = '🎉';
+    var p = document.createElement('p');
+    p.textContent = 'Sem tarefas pendentes!';
+    var sm = document.createElement('small');
+    sm.textContent = 'Todos os quartos estão limpos.';
+    empty.appendChild(emojiDiv);
+    empty.appendChild(p);
+    empty.appendChild(sm);
+    list.appendChild(empty);
+    return;
+  }
+
+  // Active first, done at the bottom
+  active.concat(done).forEach(function (task) {
+    list.appendChild(buildCard(task));
+  });
+}
+
+function buildCard(task) {
+  var prio   = task.priority || 'normal';
+  var status = task.status   || 'pending';
+
+  var card = document.createElement('div');
+  card.className = 'task-card priority-' + prio + ' status-' + status;
+
+  /* top row */
+  var top = document.createElement('div');
+  top.className = 'task-card-top';
+
+  var roomEl = document.createElement('div');
+  roomEl.className = 'task-room';
+  roomEl.textContent = task.roomNumber || '?';
+  top.appendChild(roomEl);
+
+  var badges = document.createElement('div');
+  badges.className = 'task-badges';
+
+  /* priority badge */
+  var pb = document.createElement('span');
+  pb.className = 'badge';
+  if (prio === 'urgent')      { pb.classList.add('badge-urgent'); pb.textContent = '🔴 Urgente'; }
+  else if (prio === 'high')   { pb.classList.add('badge-high');   pb.textContent = '🟠 Alta'; }
+  else if (prio === 'low')    { pb.classList.add('badge-low');    pb.textContent = '⚪ Baixa'; }
+  else                        { pb.classList.add('badge-normal'); pb.textContent = '🔵 Normal'; }
+  badges.appendChild(pb);
+
+  /* type badge */
+  if (task.type) {
+    var tb = document.createElement('span');
+    tb.className = 'badge badge-type';
+    var typeMap = { checkout: '🛏 Checkout', daily: '🔄 Diária', inspection: '🔍 Inspeção' };
+    tb.textContent = typeMap[task.type] || task.type;
+    badges.appendChild(tb);
+  }
+
+  /* status badge */
+  if (status === 'in_progress') {
+    var sb = document.createElement('span');
+    sb.className = 'badge badge-in_progress';
+    sb.textContent = '🔧 Em andamento';
+    badges.appendChild(sb);
+  } else if (status === 'done' || status === 'inspected') {
+    var sb2 = document.createElement('span');
+    sb2.className = 'badge badge-done';
+    sb2.textContent = status === 'inspected' ? '✅ Inspecionado' : '✅ Concluído';
+    badges.appendChild(sb2);
+  }
+
+  top.appendChild(badges);
+  card.appendChild(top);
+
+  /* estimated time */
+  if (task.estimatedMinutes) {
+    var te = document.createElement('div');
+    te.className = 'task-time';
+    te.textContent = '⏱ Estimado: ' + task.estimatedMinutes + ' min';
+    card.appendChild(te);
+  }
+
+  /* notes */
+  if (task.notes) {
+    var ne = document.createElement('div');
+    ne.className = 'task-notes';
+    ne.textContent = '"' + task.notes + '"';
+    card.appendChild(ne);
+  }
+
+  /* action buttons */
+  if (status === 'pending' || status === 'in_progress') {
+    var actions = document.createElement('div');
+    actions.className = 'task-actions';
+
+    if (status === 'pending') {
+      var bs = document.createElement('button');
+      bs.className = 'btn-start';
+      bs.textContent = '▶ Iniciar';
+      (function (id) {
+        bs.addEventListener('click', function () { startTask(id); });
+      }(task.id));
+      actions.appendChild(bs);
+    }
+
+    if (status === 'in_progress') {
+      var bd = document.createElement('button');
+      bd.className = 'btn-done';
+      bd.textContent = '✅ Concluir';
+      (function (t) {
+        bd.addEventListener('click', function () { openModal(t); });
+      }(task));
+      actions.appendChild(bd);
+    }
+
+    card.appendChild(actions);
+  }
+
+  return card;
+}
+
+/* ──────────────────────────────────────────────────
+   TASK ACTIONS
+────────────────────────────────────────────────── */
+async function startTask(taskId) {
+  try {
+    var resp = await fetch(API_URL + '/api/cleaning/tasks/' + taskId + '/start', {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (resp.status === 401) { doLogout(); return; }
+    if (!resp.ok) {
+      var d = await resp.json().catch(function () { return {}; });
+      throw new Error(d.error || 'Erro ao iniciar');
+    }
+    showToast('Limpeza iniciada! 🧹', 'success');
+    loadTasks();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function openModal(task) {
+  currentTaskId = task.id;
+  document.getElementById('modal-room-display').textContent =
+    'Quarto ' + (task.roomNumber || '—');
+  document.getElementById('modal-notes').value = '';
+  document.getElementById('photo-preview').style.display = 'none';
+  document.getElementById('photo-preview').src = '';
+  document.getElementById('photo-label-text').textContent = 'Tirar foto do quarto';
+  document.getElementById('photo-input').value = '';
+  document.getElementById('modal-complete').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal-complete').classList.remove('open');
+  currentTaskId = null;
+}
+
+async function confirmComplete() {
+  if (!currentTaskId) return;
+  var btn = document.getElementById('btn-confirm');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Enviando…';
+
+  var notes = document.getElementById('modal-notes').value.trim();
+  var body  = {};
+  if (notes) body.notes = notes;
+
+  try {
+    var resp = await fetch(
+      API_URL + '/api/cleaning/tasks/' + currentTaskId + '/complete', {
+        method: 'PUT',
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      }
+    );
+    if (resp.status === 401) { doLogout(); return; }
+    if (!resp.ok) {
+      var d = await resp.json().catch(function () { return {}; });
+      throw new Error(d.error || 'Erro ao concluir');
+    }
+    closeModal();
+    showToast('Quarto concluído! ✅', 'success');
+    loadTasks();
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✅ Confirmar';
+  }
+}
+
+/* ──────────────────────────────────────────────────
+   TOAST
+────────────────────────────────────────────────── */
+function showToast(msg, type) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (type ? ' ' + type : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.className = 'toast'; }, 3200);
+}
+
+/* ──────────────────────────────────────────────────
+   SERVICE WORKER REGISTRATION
+────────────────────────────────────────────────── */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('/sw.js').catch(function () {});
+  });
+}
+</script>
+</body>
+</html>

@@ -852,12 +852,27 @@ function renderStaff() {
         el('strong', {text: s.name + (!s.isActive ? ' (inativa)' : '')}),
         el('span', {text: s.phone || 'Sem telefone'})
       ]),
-      el('div', {style:'display:flex;gap:6px'}, [
+      el('div', {style:'display:flex;gap:6px;flex-wrap:wrap'}, [
         el('button', {class:'btn btn-ghost', style:'padding:4px 10px;font-size:12px', on:{click:function(){openStaffModal(s)}}}, ['Editar']),
+        s.isActive ? el('button', {class:'btn btn-ghost', style:'padding:4px 10px;font-size:12px', title:'Copiar link de acesso da faxineira', on:{click:function(){copyStaffLink(s)}}}, ['🔗 Link']) : null,
         s.isActive ? el('button', {class:'btn btn-ghost', style:'padding:4px 10px;font-size:12px;color:var(--danger)', on:{click:function(){deactivateStaff(s.id)}}}, ['Desativar']) : null
       ])
     ]));
   });
+}
+
+function copyStaffLink(s) {
+  var base = 'https://lobby-backend-tp84.onrender.com/cleaning-app.html';
+  var link = base + '?staff=' + s.id;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(link).then(function() {
+      toast('Link de ' + s.name.split(' ')[0] + ' copiado! 🔗', 'success');
+    }).catch(function() {
+      prompt('Copie o link abaixo:', link);
+    });
+  } else {
+    prompt('Copie o link abaixo:', link);
+  }
 }
 
 function openStaffModal(s) {
