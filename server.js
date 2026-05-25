@@ -8,6 +8,7 @@ const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const cors = require('cors');
 const { randomUUID } = require('crypto');
+const db = require('./db');
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const JWT_SECRET = process.env.JWT_SECRET || (
@@ -24,11 +25,8 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc:  ["'self'"],
-      // 'unsafe-inline' necessário: todo o JS está inline em index.html e cleaning-app.html (SPA single-file).
-      // A proteção contra XSS vem do uso consistente de DOM API + função esc() — não do CSP script-src.
       scriptSrc:   ["'self'", "'unsafe-inline'"],
       styleSrc:    ["'self'", "'unsafe-inline'"],
-      // Permite que a cleaning-app.html (pode rodar em outro domínio) chame a API do Render
       imgSrc:      ["'self'", 'data:', 'https://lobby-backend-tp84.onrender.com'],
       connectSrc:  ["'self'", 'https://lobby-backend-tp84.onrender.com'],
       fontSrc:     ["'self'"],
@@ -36,7 +34,7 @@ app.use(helmet({
       frameSrc:    ["'none'"],
     },
   },
-  crossOriginResourcePolicy: { policy: 'cross-origin' }, // permite assets serem carregados por outros domínios
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:10000')
@@ -65,187 +63,189 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20,
   message: 'Muitas tentativas de login. Tente novamente em 15 minutos.' });
 
-// ============ IN-MEMORY STORE (DEMO) ============
-const DB = {
-  users:               new Map(),
-  rooms:               new Map(),
-  guests:              new Map(),
-  stays:               new Map(),
-  invoices:            new Map(),
-  // Módulo Governança
-  cleaning_staff:      new Map(),
-  cleaning_tasks:      new Map(),
-  cleaning_inspections:new Map(),
-  // Módulo FNRH
-  fnrh_records:        new Map(),
-  // Módulo Tarifário
-  seasons:             new Map(),
-  hotels:              new Map(),
-};
-
-const find    = (table, fn) => Array.from(DB[table].values()).filter(fn);
-const findOne = (table, fn) => Array.from(DB[table].values()).find(fn) ?? null;
-const put     = (table, obj) => { DB[table].set(obj.id, obj); return obj; };
-
 // ============ SEED DATA ============
 const HOTEL_ID = 'a1b2c3d4-e5f6-4890-a123-456789abcdef';
 const USER_ID  = 'b1c2d3e4-f5a6-4890-b456-789abcdef012';
 const BCRYPT_ROUNDS = 10;
 
 async function seedDatabase() {
-const adminPwHash = await bcrypt.hash('demo123', BCRYPT_ROUNDS);
-put('users', { id: USER_ID, hotelId: HOTEL_ID, name: 'Admin Demo', email: 'admin@demo.com', password: adminPwHash });
+  const [hotelExists] = await db.q('SELECT id FROM hotels WHERE id = $1', [HOTEL_ID]);
+  if (hotelExists) {
+    console.log('✅ Banco já inicializado — seed pulado');
+    return;
+  }
+  console.log('🌱 Inserindo dados demo no Supabase...');
 
-const roomDefs = [
-  ['101','standard',2,150], ['102','standard',2,150], ['103','standard',2,150],
-  ['201','double',  4,250], ['202','double',  4,250],
-  ['301','suite',   2,450], ['302','suite',   2,450],
-  ['401','standard',2,150], ['402','double',  4,250], ['501','suite',2,500],
-];
-const roomIds = {};
-for (const [num, type, cap, rate] of roomDefs) {
-  const id = randomUUID();
-  roomIds[num] = id;
-  put('rooms', { id, hotelId: HOTEL_ID, roomNumber: num, status: 'available', roomType: type, capacity: cap, dailyRate: rate });
+  // Hotel (usa supabase-js — weekdaymultipliers é JSONB, não pode ir via exec_sql params)
+  await db.supabase.from('hotels').upsert(
+    { id: HOTEL_ID, name: 'Hotel Demo LOBBY', weekdaymultipliers: {'0':1.0,'1':1.0,'2':1.0,'3':1.0,'4':1.0,'5':1.2,'6':1.3} },
+    { onConflict: 'id', ignoreDuplicates: true }
+  );
+
+  // User (admin) — usa supabase-js upsert: bcrypt hash tem '$2b$10$...' que quebra exec_sql
+  const adminPwHash = await bcrypt.hash('demo123', BCRYPT_ROUNDS);
+  await db.supabase.from('users').upsert(
+    { id: USER_ID, hotelid: HOTEL_ID, email: 'admin@demo.com', password_hash: adminPwHash, name: 'Admin Demo', role: 'admin', isactive: true },
+    { onConflict: 'email' }
+  );
+
+  // Quartos
+  const roomDefs = [
+    ['101','standard',2,150], ['102','standard',2,150], ['103','standard',2,150],
+    ['201','double',  4,250], ['202','double',  4,250],
+    ['301','suite',   2,450], ['302','suite',   2,450],
+    ['401','standard',2,150], ['402','double',  4,250], ['501','suite',2,500],
+  ];
+  const roomIds = {};
+  for (const [num, type, cap, rate] of roomDefs) {
+    const id = randomUUID();
+    roomIds[num] = id;
+    await db.q(
+      `INSERT INTO rooms (id, hotelid, roomnumber, roomtype, capacity, dailyrate, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'available') ON CONFLICT DO NOTHING`,
+      [id, HOTEL_ID, parseInt(num), type, cap, rate]
+    );
+  }
+
+  // Hóspedes
+  const guestDefs = [
+    ['12345678901', 'João Silva',    'joao@email.com',  '11999990001', 3, 2100, 42],
+    ['98765432100', 'Maria Oliveira','maria@email.com', '11999990002', 5, 4500, 75],
+    ['11122233344', 'Carlos Santos', 'carlos@email.com','11999990003', 1,  450,  8],
+  ];
+  let joaoId;
+  const guestIds = [];
+  for (const [cpf, name, email, phone, totalStays, totalSpent, vipScore] of guestDefs) {
+    const id = randomUUID();
+    guestIds.push(id);
+    if (cpf === '12345678901') joaoId = id;
+    await db.q(
+      `INSERT INTO guests (id, hotelid, cpf, name, email, phone, totalstays, totalspent, vipscore)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING`,
+      [id, HOTEL_ID, cpf, name, email, phone, totalStays, totalSpent, vipScore]
+    );
+  }
+
+  // Hospedagem ativa (João no quarto 201)
+  const activeStayId = randomUUID();
+  await db.q(
+    `INSERT INTO stays (id, hotelid, guestid, roomid, numberofnights, dailyrate, checkintime, extras, paymentstatus)
+     VALUES ($1, $2, $3, $4, 2, 250, $5, 0, 'pending') ON CONFLICT DO NOTHING`,
+    [activeStayId, HOTEL_ID, joaoId, roomIds['201'], new Date(Date.now() - 86400000)]
+  );
+  await db.q(`UPDATE rooms SET status = 'occupied' WHERE id = $1`, [roomIds['201']]);
+
+  // Faxineiras — usa db.insert (supabase-js): bcrypt hash não pode ir via exec_sql
+  const staffDefs = [
+    ['Ana Lima',      '11988880001', '123456'],
+    ['Beatriz Costa', '11988880002', '567890'],
+    ['Carla Mendes',  '11988880003', '901234'],
+  ];
+  const staffIds = [];
+  for (const [name, phone, pin] of staffDefs) {
+    const id = randomUUID();
+    staffIds.push(id);
+    const pinHash = await bcrypt.hash(pin, BCRYPT_ROUNDS);
+    await db.supabase.from('cleaning_staff')
+      .upsert({ id, hotelid: HOTEL_ID, name, phone, pin: pinHash, isactive: true }, { onConflict: 'id', ignoreDuplicates: true });
+  }
+
+  // Tarefas demo
+  const taskSeeds = [
+    [roomIds['101'], staffIds[0], 'pending',    'normal', 30],
+    [roomIds['102'], staffIds[1], 'in_progress','high',   45],
+    [roomIds['103'], staffIds[2], 'done',       'normal', 25],
+    [roomIds['301'], staffIds[0], 'pending',    'urgent', 60],
+  ];
+  for (const [roomId, assignedTo, status, priority, estimatedMinutes] of taskSeeds) {
+    const startedAt   = status !== 'pending'  ? new Date(Date.now() - 1800000) : null;
+    const completedAt = status === 'done'      ? new Date(Date.now() -  900000) : null;
+    const actualMinutes = status === 'done'    ? 28 : null;
+    await db.q(
+      `INSERT INTO cleaning_tasks (id, hotelid, roomid, assignedto, status, priority, estimatedminutes, actualminutes, startedat, completedat)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING`,
+      [randomUUID(), HOTEL_ID, roomId, assignedTo, status, priority, estimatedMinutes, actualMinutes, startedAt, completedAt]
+    );
+  }
+
+  // Temporadas
+  const seasonSeeds = [
+    ['Réveillon',       'peak',    '2026-12-26','2027-01-02', 2.50],
+    ['Carnaval 2027',   'peak',    '2027-02-26','2027-03-05', 2.20],
+    ['Alta Temporada',  'high',    '2026-12-01','2027-02-28', 1.50],
+    ['Baixa Temporada', 'low',     '2026-04-01','2026-06-30', 0.80],
+  ];
+  for (const [name, type, startdate, enddate, pricemultiplier] of seasonSeeds) {
+    await db.q(
+      `INSERT INTO seasons (id, hotelid, name, type, startdate, enddate, pricemultiplier)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
+      [randomUUID(), HOTEL_ID, name, type, startdate, enddate, pricemultiplier]
+    );
+  }
+
+  // Hospedagens concluídas + invoices para relatórios
+  const D = (daysAgo) => new Date(Date.now() - daysAgo * 86400000);
+  const completedStays = [
+    ['101', 0, 18, 15, 3, 150, 'pix'],
+    ['102', 1,  5,  2, 3, 150, 'credit'],
+    ['301', 2, 25, 20, 5, 450, 'credit'],
+    ['302', 0, 12,  9, 3, 450, 'debit'],
+    ['401', 1, 30, 27, 3, 150, 'cash'],
+    ['402', 2,  8,  6, 2, 250, 'pix'],
+    ['103', 0, 40, 37, 3, 150, 'credit'],
+    ['501', 1, 45, 40, 5, 500, 'credit'],
+  ];
+  for (const [roomKey, gIdx, cin, cout, nights, rate, pay] of completedStays) {
+    const sid     = randomUUID();
+    const guestId = guestIds[gIdx] || guestIds[0];
+    await db.q(
+      `INSERT INTO stays (id, hotelid, guestid, roomid, numberofnights, dailyrate, checkintime, checkouttime, extras, paymentmethod, paymentstatus)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, 'paid') ON CONFLICT DO NOTHING`,
+      [sid, HOTEL_ID, guestId, roomIds[roomKey], nights, rate, D(cin), D(cout), pay]
+    );
+    await db.q(
+      `INSERT INTO invoices (id, hotelid, stayid, totalvalue, paymentmethod, status, createdat)
+       VALUES ($1, $2, $3, $4, $5, 'paid', $6) ON CONFLICT DO NOTHING`,
+      [randomUUID(), HOTEL_ID, sid, nights * rate, pay, D(cout)]
+    );
+  }
+
+  // FNRH demo
+  await db.q(
+    `INSERT INTO fnrh_records
+       (id, hotelid, guestid, stayid, fullname, documenttype, documentnumber,
+        documentissuer, documentissuerstate, birthdate, nationality, gender, profession,
+        addressstreet, addressnumber, addresscity, addressstate, addresszipcode, addresscountry,
+        arrivaldate, departuredate, transportmethod, transportlicense,
+        origincity, destinationcity, purpose, exportedtosismatur)
+     VALUES
+       ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,false)
+     ON CONFLICT DO NOTHING`,
+    [
+      randomUUID(), HOTEL_ID, joaoId, activeStayId,
+      'João Silva', 'CPF', '12345678901', 'SSP', 'SP',
+      '1985-03-15', 'Brasileiro', 'M', 'Engenheiro',
+      'Rua das Flores', '123', 'São Paulo', 'SP', '01310-100', 'Brasil',
+      new Date(Date.now() - 86400000).toISOString().split('T')[0],
+      new Date(Date.now() + 86400000).toISOString().split('T')[0],
+      'carro', 'ABC-1234', 'São Paulo', 'Rio de Janeiro', 'turismo',
+    ]
+  );
+
+  console.log('✅ Demo database inicializado — login: admin@demo.com / demo123');
 }
-
-const guestDefs = [
-  ['12345678901', 'João Silva',     'joao@email.com',   '11999990001', 3, 2100, 42],
-  ['98765432100', 'Maria Oliveira', 'maria@email.com',  '11999990002', 5, 4500, 75],
-  ['11122233344', 'Carlos Santos',  'carlos@email.com', '11999990003', 1,  450,  8],
-];
-let joaoId;
-for (const [cpf, name, email, phone, totalStays, totalSpent, vipScore] of guestDefs) {
-  const id = randomUUID();
-  if (cpf === '12345678901') joaoId = id;
-  put('guests', { id, hotelId: HOTEL_ID, cpf, name, email, phone, totalStays, totalSpent, vipScore });
-}
-
-// Active stay: João in room 201
-const activeStayId = randomUUID();
-put('stays', {
-  id: activeStayId, hotelId: HOTEL_ID,
-  guestId: joaoId, roomId: roomIds['201'],
-  numberOfNights: 2, dailyRate: 250,
-  checkinTime: new Date(Date.now() - 86400000).toISOString(),
-  checkoutTime: null, extras: 0, paymentMethod: null
-});
-DB.rooms.get(roomIds['201']).status = 'occupied';
-
-// Seed: faxineiras demo
-const staffDefs = [
-  ['Ana Lima',      '11988880001', '123456'],
-  ['Beatriz Costa', '11988880002', '567890'],
-  ['Carla Mendes',  '11988880003', '901234'],
-];
-const staffIds = [];
-for (const [name, phone, pin] of staffDefs) {
-  const id = randomUUID();
-  staffIds.push(id);
-  const pinHash = await bcrypt.hash(pin, BCRYPT_ROUNDS);
-  put('cleaning_staff', { id, hotelId: HOTEL_ID, name, phone, pin: pinHash, isActive: true, createdAt: new Date().toISOString() });
-}
-
-// Seed: tarefas demo para quartos disponíveis
-const taskSeeds = [
-  [roomIds['101'], staffIds[0], 'pending',     'normal', 30],
-  [roomIds['102'], staffIds[1], 'in_progress', 'high',   45],
-  [roomIds['103'], staffIds[2], 'done',        'normal', 25],
-  [roomIds['301'], staffIds[0], 'pending',     'urgent', 60],
-];
-for (const [roomId, assignedTo, status, priority, estimatedMinutes] of taskSeeds) {
-  put('cleaning_tasks', {
-    id: randomUUID(), hotelId: HOTEL_ID, roomId, assignedTo, status, priority,
-    estimatedMinutes, actualMinutes: status === 'done' ? 28 : null,
-    notes: null,
-    startedAt: status !== 'pending' ? new Date(Date.now() - 1800000).toISOString() : null,
-    completedAt: status === 'done'  ? new Date(Date.now() -  900000).toISOString() : null,
-    inspectedAt: null, inspectedBy: null,
-    createdAt: new Date().toISOString(),
-  });
-}
-
-// Seed: hotel demo com multiplicadores por dia da semana
-put('hotels', {
-  id: HOTEL_ID, name: 'Hotel Demo LOBBY',
-  weekdayMultipliers: { '0':1.0,'1':1.0,'2':1.0,'3':1.0,'4':1.0,'5':1.2,'6':1.3 },
-});
-
-// Seed: temporadas demo
-const seasonSeeds = [
-  ['Réveillon',         'peak',    '2026-12-26', '2027-01-02', 2.50],
-  ['Carnaval 2027',     'peak',    '2027-02-26', '2027-03-05', 2.20],
-  ['Alta Temporada',    'high',    '2026-12-01', '2027-02-28', 1.50],
-  ['Baixa Temporada',   'low',     '2026-04-01', '2026-06-30', 0.80],
-];
-for (const [name, type, startDate, endDate, priceMultiplier] of seasonSeeds) {
-  put('seasons', { id: randomUUID(), hotelId: HOTEL_ID, name, type, startDate, endDate, priceMultiplier, createdAt: new Date().toISOString() });
-}
-
-// Seed: hospedagens concluídas + invoices para relatórios demo
-const D = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString();
-const completedStays = [
-  // [roomKey, guestIdx, checkinDaysAgo, checkoutDaysAgo, nights, rate, payMethod]
-  ['101', 0, 18, 15, 3, 150, 'pix'],
-  ['102', 1,  5,  2, 3, 150, 'credit'],
-  ['301', 2, 25, 20, 5, 450, 'credit'],
-  ['302', 0, 12,  9, 3, 450, 'debit'],
-  ['401', 1, 30, 27, 3, 150, 'cash'],
-  ['402', 2,  8,  6, 2, 250, 'pix'],
-  ['103', 0, 40, 37, 3, 150, 'credit'],
-  ['501', 1, 45, 40, 5, 500, 'credit'],
-];
-const guestIds = Array.from(DB.guests.values()).map(g => g.id);
-for (const [roomKey, gIdx, cin, cout, nights, rate, pay] of completedStays) {
-  const sid = randomUUID();
-  const guestId = guestIds[gIdx] || guestIds[0];
-  put('stays', {
-    id: sid, hotelId: HOTEL_ID, guestId, roomId: roomIds[roomKey],
-    numberOfNights: nights, dailyRate: rate,
-    checkinTime: D(cin), checkoutTime: D(cout), extras: 0, paymentMethod: pay,
-  });
-  put('invoices', {
-    id: randomUUID(), hotelId: HOTEL_ID, stayId: sid,
-    total: nights * rate, paymentMethod: pay, status: 'paid', createdAt: D(cout),
-  });
-}
-
-// Seed: FNRH demo para hospedagem ativa do João
-put('fnrh_records', {
-  id: randomUUID(), hotelId: HOTEL_ID, guestId: joaoId, stayId: activeStayId,
-  fullName: 'João Silva', documentType: 'CPF', documentNumber: '12345678901',
-  documentIssuer: 'SSP', documentIssuerState: 'SP',
-  birthDate: '1985-03-15', nationality: 'Brasileiro', gender: 'M',
-  profession: 'Engenheiro',
-  addressStreet: 'Rua das Flores', addressNumber: '123', addressComplement: null,
-  addressNeighborhood: 'Centro', addressCity: 'São Paulo', addressState: 'SP',
-  addressZipcode: '01310-100', addressCountry: 'Brasil',
-  arrivalDate: new Date(Date.now() - 86400000).toISOString().split('T')[0],
-  departureDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
-  transportMethod: 'carro', transportLicense: 'ABC-1234',
-  originCity: 'São Paulo', destinationCity: 'Rio de Janeiro',
-  purpose: 'turismo',
-  exportedToSismatur: false, exportedAt: null,
-  createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-});
-
-console.log('✅ Demo database pronto — login: admin@demo.com / demo123');
-} // fim seedDatabase
 
 // ============ HEALTH CHECK ============
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', mode: 'demo', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', mode: 'supabase', timestamp: new Date().toISOString() });
 });
 
 // ============ FUNÇÕES UTILITÁRIAS ============
-
-// Remove acentos e converte para caixa alta (exportação SISMATUR)
 function removeAccents(str) {
   if (!str) return '';
   return str.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
 }
 
-// Valida CPF com dígitos verificadores
 function validateCPFDoc(cpf) {
   cpf = cpf.replace(/\D/g, '');
   if (cpf.length !== 11 || /^(\d)\1{10}$/.test(cpf)) return false;
@@ -259,7 +259,6 @@ function validateCPFDoc(cpf) {
   return d2 === parseInt(cpf[10]);
 }
 
-// Formata data YYYY-MM-DD → YYYYMMDD para SISMATUR
 function fmtDate(dateStr) {
   return dateStr ? dateStr.replace(/-/g, '') : '';
 }
@@ -272,23 +271,20 @@ const VALID_UFS = new Set([
 // ============ VALIDATION SCHEMAS ============
 const LoginSchema = z.object({ email: z.string().email(), password: z.string().min(6) });
 const GuestSchema = z.object({
-  cpf: z.string().regex(/^\d{11}$/).refine(validateCPFDoc, 'CPF inválido'),
-  name: z.string().min(3).max(120),
+  cpf:   z.string().regex(/^\d{11}$/).refine(validateCPFDoc, 'CPF inválido'),
+  name:  z.string().min(3).max(120),
   email: z.string().email().optional().nullable(),
-  phone: z.string().optional().nullable()
+  phone: z.string().optional().nullable(),
 });
 const StaySchema = z.object({
   guestId: z.string().uuid(),
-  roomId: z.string().uuid(),
+  roomId:  z.string().uuid(),
   numberOfNights: z.number().min(1).max(365),
-  // dailyRate vem do servidor (room.dailyRate), nunca do cliente
 });
-
-// Schemas: Governança
 const CleaningStaffSchema = z.object({
-  name:  z.string().min(3).max(120),
-  pin:   z.string().regex(/^\d{4,6}$/, 'PIN deve ter 4–6 dígitos'),
-  phone: z.string().regex(/^[\d\s()\-+]{10,15}$/).optional().nullable(),
+  name:     z.string().min(3).max(120),
+  pin:      z.string().regex(/^\d{4,6}$/, 'PIN deve ter 4–6 dígitos'),
+  phone:    z.string().regex(/^[\d\s()\-+]{10,15}$/).optional().nullable(),
   isActive: z.boolean().optional(),
 });
 const CleaningTaskSchema = z.object({
@@ -312,7 +308,6 @@ const StaffLoginSchema = z.object({
   pin:     z.string().regex(/^\d{4,6}$/),
 });
 
-// Valida que a string YYYY-MM-DD é uma data de calendário real (ano 2000-2100)
 function isCalendarDate(str) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
   const d = new Date(str + 'T12:00:00');
@@ -321,8 +316,6 @@ function isCalendarDate(str) {
   return year >= 2000 && year <= 2100;
 }
 
-// Schemas: Tarifário
-// SeasonSchemaBase é um ZodObject puro — necessário para suportar .partial() no PUT
 const SeasonSchemaBase = z.object({
   name:            z.string().min(2).max(100),
   type:            z.enum(['low','regular','high','peak']),
@@ -330,53 +323,46 @@ const SeasonSchemaBase = z.object({
   endDate:         z.string().refine(isCalendarDate, 'endDate inválida (use YYYY-MM-DD)'),
   priceMultiplier: z.number().min(0.5).max(3.0),
 });
-// SeasonSchema adiciona a validação cruzada das datas (usada apenas na criação)
 const SeasonSchema = SeasonSchemaBase.refine(
   d => d.endDate > d.startDate,
   { message: 'endDate deve ser após startDate', path: ['endDate'] }
 );
-
 const WeekdaySchema = z.object({
-  '0': z.number().min(0.5).max(3.0),
-  '1': z.number().min(0.5).max(3.0),
-  '2': z.number().min(0.5).max(3.0),
-  '3': z.number().min(0.5).max(3.0),
-  '4': z.number().min(0.5).max(3.0),
-  '5': z.number().min(0.5).max(3.0),
+  '0': z.number().min(0.5).max(3.0), '1': z.number().min(0.5).max(3.0),
+  '2': z.number().min(0.5).max(3.0), '3': z.number().min(0.5).max(3.0),
+  '4': z.number().min(0.5).max(3.0), '5': z.number().min(0.5).max(3.0),
   '6': z.number().min(0.5).max(3.0),
 });
 
-// Schema base FNRH (ZodObject — suporta .partial())
 const FNRHObjectBase = z.object({
-  guestId:              z.string().uuid(),
-  stayId:               z.string().uuid(),
-  fullName:             z.string().min(3).max(200),
-  documentType:         z.enum(['CPF','RG','PASSAPORTE']),
-  documentNumber:       z.string().min(5).max(30),
-  documentIssuer:       z.string().max(50).optional().nullable(),
-  documentIssuerState:  z.string().length(2).optional().nullable(),
-  birthDate:            z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  nationality:          z.string().min(2).max(50).default('Brasileiro'),
-  gender:               z.enum(['M','F','O']).optional().nullable(),
-  profession:           z.string().max(100).optional().nullable(),
-  addressStreet:        z.string().min(3).max(200),
-  addressNumber:        z.string().max(20).optional().nullable(),
-  addressComplement:    z.string().max(100).optional().nullable(),
-  addressNeighborhood:  z.string().max(100).optional().nullable(),
-  addressCity:          z.string().min(2).max(100),
-  addressState:         z.string().length(2).toUpperCase(),
-  addressZipcode:       z.string().max(10).optional().nullable(),
-  addressCountry:       z.string().max(50).default('Brasil'),
-  arrivalDate:          z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  departureDate:        z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  transportMethod:      z.enum(['carro','onibus','aviao','trem','barco','outro']).optional().nullable(),
-  transportLicense:     z.string().max(20).optional().nullable(),
-  originCity:           z.string().max(100).optional().nullable(),
-  destinationCity:      z.string().max(100).optional().nullable(),
-  purpose:              z.enum(['turismo','negocios','evento','saude','estudo','outro']).optional().nullable(),
+  guestId:             z.string().uuid(),
+  stayId:              z.string().uuid(),
+  fullName:            z.string().min(3).max(200),
+  documentType:        z.enum(['CPF','RG','PASSAPORTE']),
+  documentNumber:      z.string().min(5).max(30),
+  documentIssuer:      z.string().max(50).optional().nullable(),
+  documentIssuerState: z.string().length(2).optional().nullable(),
+  birthDate:           z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  nationality:         z.string().min(2).max(50).default('Brasileiro'),
+  gender:              z.enum(['M','F','O']).optional().nullable(),
+  profession:          z.string().max(100).optional().nullable(),
+  addressStreet:       z.string().min(3).max(200),
+  addressNumber:       z.string().max(20).optional().nullable(),
+  addressComplement:   z.string().max(100).optional().nullable(),
+  addressNeighborhood: z.string().max(100).optional().nullable(),
+  addressCity:         z.string().min(2).max(100),
+  addressState:        z.string().length(2).toUpperCase(),
+  addressZipcode:      z.string().max(10).optional().nullable(),
+  addressCountry:      z.string().max(50).default('Brasil'),
+  arrivalDate:         z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  departureDate:       z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  transportMethod:     z.enum(['carro','onibus','aviao','trem','barco','outro']).optional().nullable(),
+  transportLicense:    z.string().max(20).optional().nullable(),
+  originCity:          z.string().max(100).optional().nullable(),
+  destinationCity:     z.string().max(100).optional().nullable(),
+  purpose:             z.enum(['turismo','negocios','evento','saude','estudo','outro']).optional().nullable(),
 });
 
-// Refinamentos FNRH — aplicados com null-guards para suportar updates parciais
 function fnrhRefine(d, ctx) {
   if (d.documentType === 'CPF' && d.documentNumber && !validateCPFDoc(d.documentNumber))
     ctx.addIssue({ code: 'custom', path: ['documentNumber'], message: 'CPF inválido' });
@@ -388,19 +374,10 @@ function fnrhRefine(d, ctx) {
     ctx.addIssue({ code: 'custom', path: ['addressState'], message: 'UF inválida' });
 }
 
-// Schema para criação (todos os campos obrigatórios) + Schema para update parcial
 const FNRHSchema        = FNRHObjectBase.superRefine(fnrhRefine);
 const FNRHPartialSchema = FNRHObjectBase.partial().superRefine(fnrhRefine);
 
-// ============ MIDDLEWARE: ENFORCE HOTEL OWNERSHIP ============
-function enforceHotelOwnership(req, res, next) {
-  const user = DB.users.get(req.user.id);
-  if (!user || user.hotelId !== req.params.hotelId)
-    return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
-  next();
-}
-
-// ============ MIDDLEWARE: JWT VERIFY ============
+// ============ MIDDLEWARE ============
 function verifyToken(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Token ausente', code: 'NO_TOKEN' });
@@ -413,8 +390,6 @@ function verifyToken(req, res, next) {
   }
 }
 
-// ============ MIDDLEWARE: VERIFY STAFF TOKEN ============
-// Valida JWT emitido para faxineiras (role = 'cleaning_staff')
 function verifyStaffToken(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Token ausente', code: 'NO_TOKEN' });
@@ -430,21 +405,27 @@ function verifyStaffToken(req, res, next) {
   }
 }
 
+// hotelId já vem no JWT — sem necessidade de DB lookup extra
+function enforceHotelOwnership(req, res, next) {
+  if (req.user.hotelId !== req.params.hotelId)
+    return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
+  next();
+}
+
 // ============ ROUTES: AUTH ============
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = LoginSchema.parse(req.body);
-    const user = findOne('users', u => u.email === email);
+    const [row] = await db.q('SELECT * FROM users WHERE email = $1 LIMIT 1', [email]);
+    const user  = db.FROM_DB.users(row ?? null);
     const valid = user && await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ error: 'Email ou senha inválidos', code: 'INVALID_CREDENTIALS' });
     const token = jwt.sign({ id: user.id, email: user.email, hotelId: user.hotelId }, JWT_SECRET, { expiresIn: '8h' });
     const { password: _, ...safeUser } = user;
-    // Cookie httpOnly — inacessível a JS, mitiga XSS
     res.cookie('lobby_token', token, {
-      httpOnly: true,
-      sameSite: 'strict',
+      httpOnly: true, sameSite: 'strict',
       secure: NODE_ENV === 'production',
-      maxAge: 8 * 60 * 60 * 1000, // 8h
+      maxAge: 8 * 60 * 60 * 1000,
     });
     res.json({ token, user: safeUser });
   } catch (err) {
@@ -453,18 +434,15 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   }
 });
 
-// Refresh: lê o cookie httpOnly e retorna token fresco para uso em memória
-// Permite que o SPA recupere a sessão após reload de página sem expor o token
-app.post('/api/auth/refresh', (req, res) => {
-  const raw = req.headers.cookie || '';
+app.post('/api/auth/refresh', async (req, res) => {
+  const raw   = req.headers.cookie || '';
   const match = raw.split(';').map(c => c.trim()).find(c => c.startsWith('lobby_token='));
   if (!match) return res.status(401).json({ error: 'Sessão expirada', code: 'NO_COOKIE' });
   const cookieToken = match.split('=')[1];
   try {
     const decoded = jwt.verify(cookieToken, JWT_SECRET);
-    const user = DB.users.get(decoded.id);
+    const user    = await db.getById('users', decoded.id);
     if (!user) return res.status(401).json({ error: 'Usuário não encontrado', code: 'USER_NOT_FOUND' });
-    // Emite novo token e renova o cookie
     const newToken = jwt.sign({ id: user.id, email: user.email, hotelId: user.hotelId }, JWT_SECRET, { expiresIn: '8h' });
     const { password: _, ...safeUser } = user;
     res.cookie('lobby_token', newToken, {
@@ -479,61 +457,70 @@ app.post('/api/auth/refresh', (req, res) => {
   }
 });
 
-// Logout: limpa o cookie httpOnly no servidor
 app.post('/api/auth/logout', (req, res) => {
   res.clearCookie('lobby_token');
   res.json({ success: true });
 });
 
 // ============ ROUTES: DASHBOARD ============
-app.get('/api/hotels/:hotelId/dashboard/stats', verifyToken, enforceHotelOwnership, (req, res) => {
-  const { hotelId } = req.params;
-  const today = new Date().toDateString();
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+app.get('/api/hotels/:hotelId/dashboard/stats', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const today        = new Date().toDateString();
+    const thirtyAgo    = new Date(Date.now() - 30 * 86400000);
 
-  const rooms    = find('rooms',    r => r.hotelId === hotelId);
-  const guests   = find('guests',   g => g.hotelId === hotelId);
-  const stays    = find('stays',    s => s.hotelId === hotelId);
-  const invoices = find('invoices', i => i.hotelId === hotelId && i.status === 'paid');
+    const [rooms, stays, invoices] = await Promise.all([
+      db.q('SELECT status FROM rooms WHERE hotelid = $1', [hotelId]),
+      db.q('SELECT checkintime, checkouttime FROM stays WHERE hotelid = $1', [hotelId]),
+      db.q(`SELECT totalvalue, createdat FROM invoices WHERE hotelid = $1 AND status = 'paid'`, [hotelId]),
+    ]);
+    const [guestCount] = await db.q('SELECT COUNT(*)::int AS cnt FROM guests WHERE hotelid = $1', [hotelId]);
 
-  const totalRooms     = rooms.length;
-  const occupiedRooms  = rooms.filter(r => r.status === 'occupied').length;
-  const cleaningRooms  = rooms.filter(r => r.status === 'cleaning').length;
-  const availableRooms = rooms.filter(r => r.status === 'available').length;
-  const occupancyRate  = totalRooms > 0 ? parseFloat((occupiedRooms / totalRooms * 100).toFixed(1)) : 0;
+    const totalRooms     = rooms.length;
+    const occupiedRooms  = rooms.filter(r => r.status === 'occupied').length;
+    const cleaningRooms  = rooms.filter(r => r.status === 'cleaning').length;
+    const availableRooms = rooms.filter(r => r.status === 'available').length;
+    const occupancyRate  = totalRooms > 0 ? parseFloat((occupiedRooms / totalRooms * 100).toFixed(1)) : 0;
 
-  const revenueThisMonth = invoices.filter(i => new Date(i.createdAt) >= thirtyDaysAgo).reduce((s, i) => s + i.total, 0);
-  const revenueToday     = invoices.filter(i => new Date(i.createdAt).toDateString() === today).reduce((s, i) => s + i.total, 0);
-  const revPAR = totalRooms > 0 ? parseFloat((revenueThisMonth / (totalRooms * 30)).toFixed(2)) : 0;
+    const invJS = invoices.map(i => ({ total: parseFloat(i.totalvalue), createdAt: new Date(i.createdat) }));
+    const revenueThisMonth = invJS.filter(i => i.createdAt >= thirtyAgo).reduce((s, i) => s + i.total, 0);
+    const revenueToday     = invJS.filter(i => i.createdAt.toDateString() === today).reduce((s, i) => s + i.total, 0);
+    const revPAR = totalRooms > 0 ? parseFloat((revenueThisMonth / (totalRooms * 30)).toFixed(2)) : 0;
 
-  res.json({
-    totalRooms, occupiedRooms, availableRooms, cleaningRooms,
-    occupancyRate,
-    activeStays:     stays.filter(s => !s.checkoutTime).length,
-    totalGuests:     guests.length,
-    checkinsToday:   stays.filter(s => new Date(s.checkinTime).toDateString() === today).length,
-    checkoutsToday:  stays.filter(s => s.checkoutTime && new Date(s.checkoutTime).toDateString() === today).length,
-    revenueToday,
-    revenueThisMonth,
-    revPAR,
-  });
+    res.json({
+      totalRooms, occupiedRooms, availableRooms, cleaningRooms, occupancyRate,
+      activeStays:    stays.filter(s => !s.checkouttime).length,
+      totalGuests:    guestCount.cnt,
+      checkinsToday:  stays.filter(s => new Date(s.checkintime).toDateString() === today).length,
+      checkoutsToday: stays.filter(s => s.checkouttime && new Date(s.checkouttime).toDateString() === today).length,
+      revenueToday, revenueThisMonth, revPAR,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro no dashboard', code: 'INTERNAL_ERROR' });
+  }
 });
 
 // ============ ROUTES: ROOMS ============
-app.get('/api/hotels/:hotelId/rooms', verifyToken, enforceHotelOwnership, (req, res) => {
-  const rooms = find('rooms', r => r.hotelId === req.params.hotelId)
-    .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
-  res.json(rooms);
+app.get('/api/hotels/:hotelId/rooms', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const rows = await db.q('SELECT * FROM rooms WHERE hotelid = $1', [req.params.hotelId]);
+    const rooms = rows.map(r => db.FROM_DB.rooms(r))
+      .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
+    res.json(rooms);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao listar quartos', code: 'INTERNAL_ERROR' });
+  }
 });
 
 // ============ ROUTES: GUESTS ============
-app.post('/api/hotels/:hotelId/guests', verifyToken, enforceHotelOwnership, (req, res) => {
+app.post('/api/hotels/:hotelId/guests', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
     const { cpf, name, email, phone } = GuestSchema.parse(req.body);
-    const guest = put('guests', {
+    const guest = await db.insert('guests', {
       id: randomUUID(), hotelId: req.params.hotelId,
       cpf, name, email: email || null, phone: phone || null,
-      totalStays: 0, totalSpent: 0, vipScore: 0
+      totalStays: 0, totalSpent: 0, vipScore: 0,
     });
     const { hotelId: _, ...out } = guest;
     res.status(201).json(out);
@@ -543,30 +530,33 @@ app.post('/api/hotels/:hotelId/guests', verifyToken, enforceHotelOwnership, (req
   }
 });
 
-app.get('/api/hotels/:hotelId/guests', verifyToken, enforceHotelOwnership, (req, res) => {
-  const guests = find('guests', g => g.hotelId === req.params.hotelId)
-    .sort((a, b) => a.name.localeCompare(b.name));
-  res.json(guests);
+app.get('/api/hotels/:hotelId/guests', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const rows  = await db.q('SELECT * FROM guests WHERE hotelid = $1 ORDER BY name', [req.params.hotelId]);
+    res.json(rows.map(r => db.FROM_DB.guests(r)));
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao listar hóspedes', code: 'INTERNAL_ERROR' });
+  }
 });
 
 // ============ ROUTES: STAYS ============
-app.post('/api/hotels/:hotelId/stays', verifyToken, enforceHotelOwnership, (req, res) => {
+app.post('/api/hotels/:hotelId/stays', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
     const { guestId, roomId, numberOfNights } = StaySchema.parse(req.body);
     const { hotelId } = req.params;
-    const room = DB.rooms.get(roomId);
+    const room = await db.getById('rooms', roomId);
     if (!room || room.hotelId !== hotelId || room.status !== 'available')
       return res.status(400).json({ error: 'Quarto não disponível', code: 'ROOM_NOT_AVAILABLE' });
 
-    const dailyRate = room.dailyRate; // sempre do servidor, nunca do cliente
-
-    const stay = put('stays', {
-      id: randomUUID(), hotelId, guestId, roomId,
-      numberOfNights, dailyRate,
-      checkinTime: new Date().toISOString(),
-      checkoutTime: null, extras: 0, paymentMethod: null
-    });
-    room.status = 'occupied';
+    const [stay] = await Promise.all([
+      db.insert('stays', {
+        id: randomUUID(), hotelId, guestId, roomId,
+        numberOfNights, dailyRate: room.dailyRate,
+        checkinTime: new Date().toISOString(),
+        checkoutTime: null, extras: 0, paymentMethod: null,
+      }),
+      db.update('rooms', roomId, { status: 'occupied' }),
+    ]);
     res.status(201).json(stay);
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: 'Dados inválidos', code: 'VALIDATION_ERROR' });
@@ -574,58 +564,68 @@ app.post('/api/hotels/:hotelId/stays', verifyToken, enforceHotelOwnership, (req,
   }
 });
 
-app.get('/api/hotels/:hotelId/stays/active/room/:roomId', verifyToken, enforceHotelOwnership, (req, res) => {
-  const { hotelId, roomId } = req.params;
-  const stay = findOne('stays', s => s.hotelId === hotelId && s.roomId === roomId && !s.checkoutTime);
-  if (!stay) return res.status(404).json({ error: 'Hospedagem ativa não encontrada', code: 'NOT_FOUND' });
-  const guest = DB.guests.get(stay.guestId);
-  res.json({ ...stay, guestname: guest?.name });
+app.get('/api/hotels/:hotelId/stays/active/room/:roomId', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId, roomId } = req.params;
+    const [row] = await db.q(
+      'SELECT s.*, g.name AS guestname FROM stays s LEFT JOIN guests g ON g.id = s.guestid WHERE s.hotelid = $1 AND s.roomid = $2 AND s.checkouttime IS NULL LIMIT 1',
+      [hotelId, roomId]
+    );
+    if (!row) return res.status(404).json({ error: 'Hospedagem ativa não encontrada', code: 'NOT_FOUND' });
+    const stay = db.FROM_DB.stays(row);
+    res.json({ ...stay, guestname: row.guestname });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar hospedagem', code: 'INTERNAL_ERROR' });
+  }
 });
 
-app.put('/api/stays/:stayId/checkout', verifyToken, (req, res) => {
-  const { stayId } = req.params;
-  const { paymentMethod, paymentStatus } = req.body;
-  const stay = DB.stays.get(stayId);
-  if (!stay) return res.status(404).json({ error: 'Hospedagem não encontrada', code: 'NOT_FOUND' });
-  if (stay.hotelId !== req.user.hotelId)
-    return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
-  if (stay.checkoutTime)
-    return res.status(409).json({ error: 'Checkout já realizado', code: 'ALREADY_CHECKED_OUT' });
+app.put('/api/stays/:stayId/checkout', verifyToken, async (req, res) => {
+  try {
+    const { stayId } = req.params;
+    const { paymentMethod, paymentStatus } = req.body;
+    const stay = await db.getById('stays', stayId);
+    if (!stay) return res.status(404).json({ error: 'Hospedagem não encontrada', code: 'NOT_FOUND' });
+    if (stay.hotelId !== req.user.hotelId)
+      return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
+    if (stay.checkoutTime)
+      return res.status(409).json({ error: 'Checkout já realizado', code: 'ALREADY_CHECKED_OUT' });
 
-  stay.checkoutTime = new Date().toISOString();
-  stay.paymentMethod = paymentMethod;
-  const total = (stay.numberOfNights * stay.dailyRate) + (stay.extras || 0);
+    const now   = new Date().toISOString();
+    const total = (stay.numberOfNights * stay.dailyRate) + (stay.extras || 0);
 
-  put('invoices', {
-    id: randomUUID(), hotelId: stay.hotelId, stayId, total,
-    paymentMethod, status: paymentStatus || 'paid',
-    createdAt: new Date().toISOString()
-  });
-
-  const room = DB.rooms.get(stay.roomId);
-  if (room) room.status = 'available';
-
-  res.json({ success: true, total });
+    await Promise.all([
+      db.update('stays', stayId, { checkoutTime: now, paymentMethod }),
+      db.insert('invoices', {
+        id: randomUUID(), hotelId: stay.hotelId, stayId,
+        total, paymentMethod, status: paymentStatus || 'paid',
+        createdAt: now,
+      }),
+      db.update('rooms', stay.roomId, { status: 'available' }),
+    ]);
+    res.json({ success: true, total });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao fazer checkout', code: 'INTERNAL_ERROR' });
+  }
 });
 
 // ============ ROUTES: GOVERNANÇA — STAFF ============
-
-// Lista todas as faxineiras do hotel
-app.get('/api/hotels/:hotelId/cleaning/staff', verifyToken, enforceHotelOwnership, (req, res) => {
-  const staff = find('cleaning_staff', s => s.hotelId === req.params.hotelId)
-    .sort((a, b) => a.name.localeCompare(b.name));
-  res.json(staff.map(({ pin, ...s }) => s)); // nunca expõe o PIN
+app.get('/api/hotels/:hotelId/cleaning/staff', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const rows  = await db.q('SELECT * FROM cleaning_staff WHERE hotelid = $1 ORDER BY name', [req.params.hotelId]);
+    const staff = rows.map(r => db.FROM_DB.cleaning_staff(r)).map(({ pin, ...s }) => s);
+    res.json(staff);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao listar faxineiras', code: 'INTERNAL_ERROR' });
+  }
 });
 
-// Cria nova faxineira
 app.post('/api/hotels/:hotelId/cleaning/staff', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
     const { name, pin, phone } = CleaningStaffSchema.parse(req.body);
     const pinHash = await bcrypt.hash(pin, BCRYPT_ROUNDS);
-    const staff = put('cleaning_staff', {
+    const staff   = await db.insert('cleaning_staff', {
       id: randomUUID(), hotelId: req.params.hotelId,
       name, phone: phone || null, pin: pinHash, isActive: true,
-      createdAt: new Date().toISOString(),
     });
     const { pin: _, ...out } = staff;
     res.status(201).json(out);
@@ -635,17 +635,15 @@ app.post('/api/hotels/:hotelId/cleaning/staff', verifyToken, enforceHotelOwnersh
   }
 });
 
-// Atualiza faxineira
 app.put('/api/hotels/:hotelId/cleaning/staff/:staffId', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
-    const staff = DB.cleaning_staff.get(req.params.staffId);
+    const staff = await db.getById('cleaning_staff', req.params.staffId);
     if (!staff || staff.hotelId !== req.params.hotelId)
       return res.status(404).json({ error: 'Faxineira não encontrada', code: 'NOT_FOUND' });
     const updates = CleaningStaffSchema.partial().parse(req.body);
-    // Se o PIN foi alterado, hasheia antes de salvar
     if (updates.pin) updates.pin = await bcrypt.hash(updates.pin, BCRYPT_ROUNDS);
-    Object.assign(staff, updates);
-    const { pin: _, ...out } = staff;
+    const updated = await db.update('cleaning_staff', req.params.staffId, updates);
+    const { pin: _, ...out } = updated;
     res.json(out);
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
@@ -653,60 +651,73 @@ app.put('/api/hotels/:hotelId/cleaning/staff/:staffId', verifyToken, enforceHote
   }
 });
 
-// Remove (desativa) faxineira
-app.delete('/api/hotels/:hotelId/cleaning/staff/:staffId', verifyToken, enforceHotelOwnership, (req, res) => {
-  const staff = DB.cleaning_staff.get(req.params.staffId);
-  if (!staff || staff.hotelId !== req.params.hotelId)
-    return res.status(404).json({ error: 'Faxineira não encontrada', code: 'NOT_FOUND' });
-  staff.isActive = false;
-  res.json({ success: true });
+app.delete('/api/hotels/:hotelId/cleaning/staff/:staffId', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const staff = await db.getById('cleaning_staff', req.params.staffId);
+    if (!staff || staff.hotelId !== req.params.hotelId)
+      return res.status(404).json({ error: 'Faxineira não encontrada', code: 'NOT_FOUND' });
+    await db.update('cleaning_staff', req.params.staffId, { isActive: false });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao desativar faxineira', code: 'INTERNAL_ERROR' });
+  }
 });
 
 // ============ ROUTES: GOVERNANÇA — TASKS ============
+app.get('/api/hotels/:hotelId/cleaning/tasks', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const { status, date, staffId } = req.query;
 
-// Lista tarefas com filtros opcionais: ?status=pending&date=today&staffId=X
-app.get('/api/hotels/:hotelId/cleaning/tasks', verifyToken, enforceHotelOwnership, (req, res) => {
-  const { hotelId } = req.params;
-  const { status, date, staffId } = req.query;
-  const todayStr = new Date().toDateString();
+    let sql    = 'SELECT * FROM cleaning_tasks WHERE hotelid = $1';
+    const params = [hotelId];
 
-  let tasks = find('cleaning_tasks', t => t.hotelId === hotelId);
+    if (status)  { sql += ` AND status = $${params.push(status)}`; }
+    if (staffId) { sql += ` AND assignedto = $${params.push(staffId)}`; }
+    if (date === 'today') { sql += ` AND DATE(createdat) = CURRENT_DATE`; }
 
-  if (status)   tasks = tasks.filter(t => t.status === status);
-  if (staffId)  tasks = tasks.filter(t => t.assignedTo === staffId);
-  if (date === 'today') tasks = tasks.filter(t => new Date(t.createdAt).toDateString() === todayStr);
+    const [taskRows, roomRows, staffRows] = await Promise.all([
+      db.q(sql, params),
+      db.q('SELECT id, roomnumber FROM rooms WHERE hotelid = $1', [hotelId]),
+      db.q('SELECT id, name FROM cleaning_staff WHERE hotelid = $1', [hotelId]),
+    ]);
 
-  // Enriquece com nome do quarto e da faxineira
-  const priorityOrder = { urgent: 0, high: 1, normal: 2, low: 3 };
-  const enriched = tasks
-    .sort((a, b) => (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9))
-    .map(t => ({
-      ...t,
-      roomNumber: DB.rooms.get(t.roomId)?.roomNumber,
-      staffName:  t.assignedTo ? DB.cleaning_staff.get(t.assignedTo)?.name : null,
-    }));
+    const roomMap  = Object.fromEntries(roomRows.map(r => [r.id, r.roomnumber?.toString()]));
+    const staffMap = Object.fromEntries(staffRows.map(s => [s.id, s.name]));
+    const priorityOrder = { urgent: 0, high: 1, normal: 2, low: 3 };
 
-  res.json(enriched);
+    const enriched = taskRows
+      .map(r => db.FROM_DB.cleaning_tasks(r))
+      .sort((a, b) => (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9))
+      .map(t => ({ ...t, roomNumber: roomMap[t.roomId], staffName: t.assignedTo ? staffMap[t.assignedTo] : null }));
+
+    res.json(enriched);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao listar tarefas', code: 'INTERNAL_ERROR' });
+  }
 });
 
-// Cria nova tarefa de limpeza
-app.post('/api/hotels/:hotelId/cleaning/tasks', verifyToken, enforceHotelOwnership, (req, res) => {
+app.post('/api/hotels/:hotelId/cleaning/tasks', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
     const { roomId, assignedTo, priority, estimatedMinutes, notes } = CleaningTaskSchema.parse(req.body);
     const { hotelId } = req.params;
-    const room = DB.rooms.get(roomId);
+
+    const room = await db.getById('rooms', roomId);
     if (!room || room.hotelId !== hotelId)
       return res.status(404).json({ error: 'Quarto não encontrado', code: 'NOT_FOUND' });
+
     if (assignedTo) {
-      const staff = DB.cleaning_staff.get(assignedTo);
+      const staff = await db.getById('cleaning_staff', assignedTo);
       if (!staff || staff.hotelId !== hotelId || !staff.isActive)
         return res.status(400).json({ error: 'Faxineira inativa ou inválida', code: 'INVALID_STAFF' });
     }
-    const task = put('cleaning_tasks', {
+
+    const task = await db.insert('cleaning_tasks', {
       id: randomUUID(), hotelId, roomId, assignedTo: assignedTo || null,
       status: 'pending', priority, estimatedMinutes, actualMinutes: null,
       notes: notes || null, startedAt: null, completedAt: null,
-      inspectedAt: null, inspectedBy: null, createdAt: new Date().toISOString(),
+      inspectedAt: null, inspectedBy: null,
     });
     res.status(201).json(task);
   } catch (err) {
@@ -715,153 +726,157 @@ app.post('/api/hotels/:hotelId/cleaning/tasks', verifyToken, enforceHotelOwnersh
   }
 });
 
-// Inicia tarefa
-app.put('/api/cleaning/tasks/:taskId/start', verifyToken, (req, res) => {
-  const task = DB.cleaning_tasks.get(req.params.taskId);
-  if (!task) return res.status(404).json({ error: 'Tarefa não encontrada', code: 'NOT_FOUND' });
-  if (task.hotelId !== req.user.hotelId)
-    return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
-  if (task.status !== 'pending')
-    return res.status(400).json({ error: 'Tarefa não está pendente', code: 'INVALID_STATUS' });
-  task.status = 'in_progress';
-  task.startedAt = new Date().toISOString();
-  // Marca quarto como em limpeza
-  const room = DB.rooms.get(task.roomId);
-  if (room) room.status = 'cleaning';
-  res.json(task);
+app.put('/api/cleaning/tasks/:taskId/start', verifyToken, async (req, res) => {
+  try {
+    const task = await db.getById('cleaning_tasks', req.params.taskId);
+    if (!task) return res.status(404).json({ error: 'Tarefa não encontrada', code: 'NOT_FOUND' });
+    if (task.hotelId !== req.user.hotelId)
+      return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
+    if (task.status !== 'pending')
+      return res.status(400).json({ error: 'Tarefa não está pendente', code: 'INVALID_STATUS' });
+
+    const [updated] = await Promise.all([
+      db.update('cleaning_tasks', task.id, { status: 'in_progress', startedAt: new Date().toISOString() }),
+      db.update('rooms', task.roomId, { status: 'cleaning' }),
+    ]);
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao iniciar tarefa', code: 'INTERNAL_ERROR' });
+  }
 });
 
-// Conclui tarefa
-app.put('/api/cleaning/tasks/:taskId/complete', verifyToken, (req, res) => {
+app.put('/api/cleaning/tasks/:taskId/complete', verifyToken, async (req, res) => {
   try {
-    const task = DB.cleaning_tasks.get(req.params.taskId);
+    const task = await db.getById('cleaning_tasks', req.params.taskId);
     if (!task) return res.status(404).json({ error: 'Tarefa não encontrada', code: 'NOT_FOUND' });
     if (task.hotelId !== req.user.hotelId)
       return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
     if (task.status !== 'in_progress')
       return res.status(400).json({ error: 'Tarefa não está em andamento', code: 'INVALID_STATUS' });
+
     const { actualMinutes, notes } = CompleteTaskSchema.parse(req.body);
     const now = new Date();
-    // Calcula tempo real se não informado mas startedAt existe
     const calcMinutes = actualMinutes ?? (task.startedAt
-      ? Math.round((now - new Date(task.startedAt)) / 60000)
-      : null);
-    task.status = 'done';
-    task.completedAt = now.toISOString();
-    task.actualMinutes = calcMinutes;
-    if (notes) task.notes = notes;
-    res.json(task);
+      ? Math.round((now - new Date(task.startedAt)) / 60000) : null);
+
+    const updated = await db.update('cleaning_tasks', task.id, {
+      status: 'done', completedAt: now.toISOString(),
+      actualMinutes: calcMinutes,
+      ...(notes ? { notes } : {}),
+    });
+    res.json(updated);
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
     res.status(500).json({ error: 'Erro ao concluir tarefa', code: 'INTERNAL_ERROR' });
   }
 });
 
-// Inspeciona tarefa
-app.put('/api/cleaning/tasks/:taskId/inspect', verifyToken, (req, res) => {
+app.put('/api/cleaning/tasks/:taskId/inspect', verifyToken, async (req, res) => {
   try {
-    const task = DB.cleaning_tasks.get(req.params.taskId);
+    const task = await db.getById('cleaning_tasks', req.params.taskId);
     if (!task) return res.status(404).json({ error: 'Tarefa não encontrada', code: 'NOT_FOUND' });
     if (task.hotelId !== req.user.hotelId)
       return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
     if (task.status !== 'done')
       return res.status(400).json({ error: 'Tarefa ainda não concluída', code: 'INVALID_STATUS' });
-    const { score, notes, passed } = InspectTaskSchema.parse(req.body);
 
-    // Cria registro de inspeção
-    put('cleaning_inspections', {
-      id: randomUUID(), taskId: task.id, score, notes: notes || null,
-      passed, createdAt: new Date().toISOString(),
+    const { score, notes, passed } = InspectTaskSchema.parse(req.body);
+    const now = new Date().toISOString();
+
+    await db.insert('cleaning_inspections', {
+      id: randomUUID(), taskId: task.id, score, notes: notes || null, passed,
     });
 
-    task.inspectedAt = new Date().toISOString();
-    task.inspectedBy = req.user.id;
+    const updates = { inspectedAt: now, inspectedBy: req.user.id };
 
     if (passed) {
-      task.status = 'inspected';
-      const room = DB.rooms.get(task.roomId);
-      if (room) room.status = 'available';
+      updates.status = 'inspected';
+      await Promise.all([
+        db.update('cleaning_tasks', task.id, updates),
+        db.update('rooms', task.roomId, { status: 'available' }),
+      ]);
     } else {
-      // Reprovado: volta para pendente e cria nova tarefa de retorno
-      task.status = 'inspection_failed';
-      put('cleaning_tasks', {
-        id: randomUUID(), hotelId: task.hotelId, roomId: task.roomId,
-        assignedTo: task.assignedTo, status: 'pending', priority: 'high',
-        estimatedMinutes: task.estimatedMinutes, actualMinutes: null,
-        notes: `Retrabalho — inspeção reprovada (nota ${score}/5): ${notes || ''}`,
-        startedAt: null, completedAt: null, inspectedAt: null, inspectedBy: null,
-        createdAt: new Date().toISOString(),
-      });
+      updates.status = 'inspection_failed';
+      await Promise.all([
+        db.update('cleaning_tasks', task.id, updates),
+        db.insert('cleaning_tasks', {
+          id: randomUUID(), hotelId: task.hotelId, roomId: task.roomId,
+          assignedTo: task.assignedTo, status: 'pending', priority: 'high',
+          estimatedMinutes: task.estimatedMinutes, actualMinutes: null,
+          notes: `Retrabalho — inspeção reprovada (nota ${score}/5): ${notes || ''}`,
+          startedAt: null, completedAt: null, inspectedAt: null, inspectedBy: null,
+        }),
+      ]);
     }
-    res.json({ task, passed });
+
+    const updatedTask = await db.getById('cleaning_tasks', task.id);
+    res.json({ task: updatedTask, passed });
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
     res.status(500).json({ error: 'Erro ao inspecionar tarefa', code: 'INTERNAL_ERROR' });
   }
 });
 
-// Gera tarefas do dia baseado nos checkouts
-app.post('/api/hotels/:hotelId/cleaning/tasks/generate-daily', verifyToken, enforceHotelOwnership, (req, res) => {
-  const { hotelId } = req.params;
-  const todayStr  = new Date().toDateString();
-  const tomorrowStr = new Date(Date.now() + 86400000).toDateString();
+app.post('/api/hotels/:hotelId/cleaning/tasks/generate-daily', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
 
-  // Quartos com checkout hoje
-  const checkoutsToday = find('stays', s =>
-    s.hotelId === hotelId && s.checkoutTime &&
-    new Date(s.checkoutTime).toDateString() === todayStr
-  );
+    const [checkoutRows, staffRows] = await Promise.all([
+      db.q(`SELECT * FROM stays WHERE hotelid = $1 AND checkouttime IS NOT NULL AND DATE(checkouttime) = CURRENT_DATE`, [hotelId]),
+      db.q(`SELECT * FROM cleaning_staff WHERE hotelid = $1 AND isactive = true`, [hotelId]),
+    ]);
 
-  if (!checkoutsToday.length)
-    return res.json({ created: 0, message: 'Nenhum checkout hoje' });
+    if (!checkoutRows.length)
+      return res.json({ created: 0, message: 'Nenhum checkout hoje' });
 
-  // Faxineiras ativas para round-robin
-  const activeStaff = find('cleaning_staff', s => s.hotelId === hotelId && s.isActive);
+    const activeStaff = staffRows.map(r => db.FROM_DB.cleaning_staff(r));
+    const created     = [];
 
-  const created = [];
-  checkoutsToday.forEach((stay, idx) => {
-    // Evita duplicar tarefas já criadas hoje para o mesmo quarto
-    const alreadyExists = findOne('cleaning_tasks', t =>
-      t.hotelId === hotelId && t.roomId === stay.roomId &&
-      new Date(t.createdAt).toDateString() === todayStr &&
-      t.status !== 'inspection_failed'
-    );
-    if (alreadyExists) return;
+    for (let idx = 0; idx < checkoutRows.length; idx++) {
+      const stay = db.FROM_DB.stays(checkoutRows[idx]);
 
-    // Define prioridade
-    const hasCheckinToday     = findOne('stays', s => s.hotelId === hotelId && s.roomId === stay.roomId && !s.checkoutTime && new Date(s.checkinTime).toDateString() === todayStr);
-    const hasCheckinTomorrow  = findOne('stays', s => s.hotelId === hotelId && s.roomId === stay.roomId && !s.checkoutTime && new Date(s.checkinTime).toDateString() === tomorrowStr);
-    const priority = hasCheckinToday ? 'urgent' : hasCheckinTomorrow ? 'high' : 'normal';
+      // Evita duplicar tarefas criadas hoje para o mesmo quarto
+      const [existing] = await db.q(
+        `SELECT id FROM cleaning_tasks WHERE hotelid = $1 AND roomid = $2 AND DATE(createdat) = CURRENT_DATE AND status != 'inspection_failed' LIMIT 1`,
+        [hotelId, stay.roomId]
+      );
+      if (existing) continue;
 
-    // Round-robin entre faxineiras
-    const assignedTo = activeStaff.length ? activeStaff[idx % activeStaff.length].id : null;
+      const [todayCheckin, tomorrowCheckin] = await Promise.all([
+        db.q(`SELECT id FROM stays WHERE hotelid = $1 AND roomid = $2 AND checkouttime IS NULL AND DATE(checkintime) = CURRENT_DATE LIMIT 1`, [hotelId, stay.roomId]),
+        db.q(`SELECT id FROM stays WHERE hotelid = $1 AND roomid = $2 AND checkouttime IS NULL AND DATE(checkintime) = CURRENT_DATE + INTERVAL '1 day' LIMIT 1`, [hotelId, stay.roomId]),
+      ]);
 
-    const task = put('cleaning_tasks', {
-      id: randomUUID(), hotelId, roomId: stay.roomId, assignedTo,
-      status: 'pending', priority, estimatedMinutes: 30, actualMinutes: null,
-      notes: null, startedAt: null, completedAt: null,
-      inspectedAt: null, inspectedBy: null, createdAt: new Date().toISOString(),
-    });
-    created.push(task);
-  });
+      const priority   = todayCheckin.length ? 'urgent' : tomorrowCheckin.length ? 'high' : 'normal';
+      const assignedTo = activeStaff.length ? activeStaff[idx % activeStaff.length].id : null;
 
-  res.status(201).json({ created: created.length, tasks: created });
+      const task = await db.insert('cleaning_tasks', {
+        id: randomUUID(), hotelId, roomId: stay.roomId, assignedTo,
+        status: 'pending', priority, estimatedMinutes: 30, actualMinutes: null,
+        notes: null, startedAt: null, completedAt: null,
+        inspectedAt: null, inspectedBy: null,
+      });
+      created.push(task);
+    }
+
+    res.status(201).json({ created: created.length, tasks: created });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao gerar tarefas', code: 'INTERNAL_ERROR' });
+  }
 });
 
 // ============ ROUTES: GOVERNANÇA — APP FAXINEIRA ============
-
-// Login da faxineira com staffId + PIN
 app.post('/api/cleaning/auth/login', loginLimiter, async (req, res) => {
   try {
     const { staffId, pin } = StaffLoginSchema.parse(req.body);
-    const staff = DB.cleaning_staff.get(staffId);
+    const staff = await db.getById('cleaning_staff', staffId);
     const valid = staff && staff.isActive && await bcrypt.compare(pin, staff.pin);
     if (!valid)
       return res.status(401).json({ error: 'PIN inválido ou conta inativa', code: 'INVALID_CREDENTIALS' });
     const token = jwt.sign(
       { id: staff.id, hotelId: staff.hotelId, name: staff.name, role: 'cleaning_staff' },
-      JWT_SECRET,
-      { expiresIn: '12h' }
+      JWT_SECRET, { expiresIn: '12h' }
     );
     const { pin: _, ...safeStaff } = staff;
     res.json({ token, staff: safeStaff });
@@ -871,60 +886,66 @@ app.post('/api/cleaning/auth/login', loginLimiter, async (req, res) => {
   }
 });
 
-// Minhas tarefas (app da faxineira)
-app.get('/api/cleaning/my-tasks', verifyStaffToken, (req, res) => {
-  const priorityOrder = { urgent: 0, high: 1, normal: 2, low: 3 };
-  const todayPrefix   = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+app.get('/api/cleaning/my-tasks', verifyStaffToken, async (req, res) => {
+  try {
+    const todayPrefix = new Date().toISOString().slice(0, 10);
 
-  const tasks = find('cleaning_tasks', t => {
-    if (t.assignedTo !== req.staff.id) return false;
-    if (['pending', 'in_progress'].includes(t.status)) return true;
-    // inclui done/inspected de hoje para o contador de concluídos
-    if (['done', 'inspected'].includes(t.status)) {
-      const ts = t.completedAt || t.inspectedAt || '';
-      return ts.startsWith(todayPrefix);
-    }
-    return false;
-  })
-  .sort((a, b) => {
-    // pendentes primeiro, depois por prioridade
-    const statusWeight = s => ({ pending: 0, in_progress: 1, done: 2, inspected: 3 }[s] ?? 9);
-    const sw = statusWeight(a.status) - statusWeight(b.status);
-    if (sw !== 0) return sw;
-    return (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9);
-  })
-  .map(t => ({
-    ...t,
-    roomNumber: DB.rooms.get(t.roomId)?.roomNumber,
-    roomType:   DB.rooms.get(t.roomId)?.roomType,
-  }));
-  res.json(tasks);
+    const taskRows = await db.q(
+      `SELECT * FROM cleaning_tasks WHERE assignedto = $1 AND (
+        status IN ('pending','in_progress')
+        OR (status IN ('done','inspected') AND DATE(COALESCE(completedat, inspectedat)) = CURRENT_DATE)
+      )`,
+      [req.staff.id]
+    );
+
+    const tasks = taskRows.map(r => db.FROM_DB.cleaning_tasks(r));
+    if (!tasks.length) return res.json([]);
+
+    const roomIds = [...new Set(tasks.map(t => t.roomId))];
+    // usa supabase-js .in() — exec_sql não suporta arrays como parâmetro
+    const { data: roomRows = [] } = await db.supabase
+      .from('rooms').select('id, roomnumber, roomtype').in('id', roomIds);
+    const roomMap = Object.fromEntries(roomRows.map(r => [r.id, { roomNumber: r.roomnumber?.toString(), roomType: r.roomtype }]));
+
+    const priorityOrder = { urgent: 0, high: 1, normal: 2, low: 3 };
+    const sorted = tasks
+      .sort((a, b) => {
+        const sw = ({'pending':0,'in_progress':1,'done':2,'inspected':3}[a.status] ?? 9) -
+                   ({'pending':0,'in_progress':1,'done':2,'inspected':3}[b.status] ?? 9);
+        if (sw !== 0) return sw;
+        return (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9);
+      })
+      .map(t => ({ ...t, ...roomMap[t.roomId] }));
+
+    res.json(sorted);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar tarefas', code: 'INTERNAL_ERROR' });
+  }
 });
 
 // ============ ROUTES: TARIFÁRIO DINÂMICO ============
-
-// Lista temporadas do hotel
-app.get('/api/hotels/:hotelId/seasons', verifyToken, enforceHotelOwnership, (req, res) => {
-  const seasons = find('seasons', s => s.hotelId === req.params.hotelId)
-    .sort((a, b) => a.startDate.localeCompare(b.startDate));
-  res.json(seasons);
+app.get('/api/hotels/:hotelId/seasons', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const rows = await db.q('SELECT * FROM seasons WHERE hotelid = $1 ORDER BY startdate', [req.params.hotelId]);
+    res.json(rows.map(r => db.FROM_DB.seasons(r)));
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao listar temporadas', code: 'INTERNAL_ERROR' });
+  }
 });
 
-// Cria temporada
-app.post('/api/hotels/:hotelId/seasons', verifyToken, enforceHotelOwnership, (req, res) => {
+app.post('/api/hotels/:hotelId/seasons', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
-    const data = SeasonSchema.parse(req.body);
+    const data      = SeasonSchema.parse(req.body);
     const { hotelId } = req.params;
 
-    // Verifica sobreposição de datas no mesmo tipo
-    const overlap = findOne('seasons', s =>
-      s.hotelId === hotelId && s.type === data.type &&
-      s.startDate < data.endDate && s.endDate > data.startDate
+    const [overlap] = await db.q(
+      `SELECT id, name FROM seasons WHERE hotelid = $1 AND type = $2 AND startdate < $3 AND enddate > $4`,
+      [hotelId, data.type, data.endDate, data.startDate]
     );
     if (overlap)
       return res.status(409).json({ error: `Sobreposição com temporada "${overlap.name}"`, code: 'DATE_OVERLAP' });
 
-    const season = put('seasons', { id: randomUUID(), hotelId, ...data, createdAt: new Date().toISOString() });
+    const season = await db.insert('seasons', { id: randomUUID(), hotelId, ...data });
     res.status(201).json(season);
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
@@ -932,137 +953,124 @@ app.post('/api/hotels/:hotelId/seasons', verifyToken, enforceHotelOwnership, (re
   }
 });
 
-// Atualiza temporada
-app.put('/api/hotels/:hotelId/seasons/:seasonId', verifyToken, enforceHotelOwnership, (req, res) => {
+app.put('/api/hotels/:hotelId/seasons/:seasonId', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
-    const season = DB.seasons.get(req.params.seasonId);
+    const season = await db.getById('seasons', req.params.seasonId);
     if (!season || season.hotelId !== req.params.hotelId)
       return res.status(404).json({ error: 'Temporada não encontrada', code: 'NOT_FOUND' });
 
     const updates = SeasonSchemaBase.partial().parse(req.body);
     const merged  = { ...season, ...updates };
 
-    // Revalida datas se alteradas
     if (merged.endDate <= merged.startDate)
       return res.status(400).json({ error: 'endDate deve ser após startDate', code: 'VALIDATION_ERROR' });
 
-    // Verifica sobreposição ignorando a própria temporada
-    const overlap = findOne('seasons', s =>
-      s.hotelId === req.params.hotelId && s.type === merged.type &&
-      s.id !== season.id &&
-      s.startDate < merged.endDate && s.endDate > merged.startDate
+    const [overlap] = await db.q(
+      `SELECT id, name FROM seasons WHERE hotelid = $1 AND type = $2 AND id != $3 AND startdate < $4 AND enddate > $5`,
+      [req.params.hotelId, merged.type, season.id, merged.endDate, merged.startDate]
     );
     if (overlap)
       return res.status(409).json({ error: `Sobreposição com temporada "${overlap.name}"`, code: 'DATE_OVERLAP' });
 
-    Object.assign(season, updates);
-    res.json(season);
+    const updated = await db.update('seasons', season.id, updates);
+    res.json(updated);
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
     res.status(500).json({ error: 'Erro ao atualizar temporada', code: 'INTERNAL_ERROR' });
   }
 });
 
-// Remove temporada
-app.delete('/api/hotels/:hotelId/seasons/:seasonId', verifyToken, enforceHotelOwnership, (req, res) => {
-  const season = DB.seasons.get(req.params.seasonId);
-  if (!season || season.hotelId !== req.params.hotelId)
-    return res.status(404).json({ error: 'Temporada não encontrada', code: 'NOT_FOUND' });
-  DB.seasons.delete(req.params.seasonId);
-  res.json({ success: true });
-});
-
-// Lê multiplicadores por dia da semana
-app.get('/api/hotels/:hotelId/weekday-multipliers', verifyToken, enforceHotelOwnership, (req, res) => {
-  const hotel = DB.hotels.get(req.params.hotelId);
-  if (!hotel) return res.status(404).json({ error: 'Hotel não encontrado', code: 'NOT_FOUND' });
-  res.json(hotel.weekdayMultipliers);
-});
-
-// Atualiza multiplicadores por dia da semana
-app.put('/api/hotels/:hotelId/weekday-multipliers', verifyToken, enforceHotelOwnership, (req, res) => {
+app.delete('/api/hotels/:hotelId/seasons/:seasonId', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
-    const hotel = DB.hotels.get(req.params.hotelId);
-    if (!hotel) return res.status(404).json({ error: 'Hotel não encontrado', code: 'NOT_FOUND' });
-    hotel.weekdayMultipliers = WeekdaySchema.parse(req.body);
-    res.json(hotel.weekdayMultipliers);
+    const season = await db.getById('seasons', req.params.seasonId);
+    if (!season || season.hotelId !== req.params.hotelId)
+      return res.status(404).json({ error: 'Temporada não encontrada', code: 'NOT_FOUND' });
+    await db.del('seasons', req.params.seasonId);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao remover temporada', code: 'INTERNAL_ERROR' });
+  }
+});
+
+app.get('/api/hotels/:hotelId/weekday-multipliers', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const [row] = await db.q('SELECT weekdaymultipliers FROM hotels WHERE id = $1', [req.params.hotelId]);
+    if (!row) return res.status(404).json({ error: 'Hotel não encontrado', code: 'NOT_FOUND' });
+    res.json(row.weekdaymultipliers);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar multiplicadores', code: 'INTERNAL_ERROR' });
+  }
+});
+
+app.put('/api/hotels/:hotelId/weekday-multipliers', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const multipliers = WeekdaySchema.parse(req.body);
+    // usa supabase-js — objeto JSONB não pode ir via exec_sql params
+    await db.supabase.from('hotels').update({ weekdaymultipliers: multipliers }).eq('id', req.params.hotelId);
+    res.json(multipliers);
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
     res.status(500).json({ error: 'Erro ao salvar multiplicadores', code: 'INTERNAL_ERROR' });
   }
 });
 
-// Calcula tarifa detalhada por período
-app.get('/api/hotels/:hotelId/tariff/calculate', verifyToken, enforceHotelOwnership, (req, res) => {
-  const { hotelId } = req.params;
-  const { roomId, checkin, checkout } = req.query;
+app.get('/api/hotels/:hotelId/tariff/calculate', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const { roomId, checkin, checkout } = req.query;
 
-  if (!roomId || !checkin || !checkout)
-    return res.status(400).json({ error: 'roomId, checkin e checkout são obrigatórios', code: 'MISSING_PARAMS' });
+    if (!roomId || !checkin || !checkout)
+      return res.status(400).json({ error: 'roomId, checkin e checkout são obrigatórios', code: 'MISSING_PARAMS' });
 
-  const room = DB.rooms.get(roomId);
-  if (!room || room.hotelId !== hotelId)
-    return res.status(404).json({ error: 'Quarto não encontrado', code: 'NOT_FOUND' });
+    const checkinDate  = new Date(checkin  + 'T12:00:00');
+    const checkoutDate = new Date(checkout + 'T12:00:00');
+    if (isNaN(checkinDate) || isNaN(checkoutDate) || checkinDate >= checkoutDate)
+      return res.status(400).json({ error: 'Datas inválidas', code: 'INVALID_DATES' });
 
-  const checkinDate  = new Date(checkin  + 'T12:00:00');
-  const checkoutDate = new Date(checkout + 'T12:00:00');
-  if (isNaN(checkinDate) || isNaN(checkoutDate) || checkinDate >= checkoutDate)
-    return res.status(400).json({ error: 'Datas inválidas', code: 'INVALID_DATES' });
+    const [room, hotelRow, seasonRows] = await Promise.all([
+      db.getById('rooms', roomId),
+      db.q('SELECT weekdaymultipliers FROM hotels WHERE id = $1', [hotelId]),
+      db.q('SELECT * FROM seasons WHERE hotelid = $1', [hotelId]),
+    ]);
 
-  const hotel    = DB.hotels.get(hotelId);
-  const wdMult   = hotel?.weekdayMultipliers || { '0':1,'1':1,'2':1,'3':1,'4':1,'5':1,'6':1 };
-  const seasons  = find('seasons', s => s.hotelId === hotelId);
-  const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const basePrice = parseFloat(room.dailyRate);
+    if (!room || room.hotelId !== hotelId)
+      return res.status(404).json({ error: 'Quarto não encontrado', code: 'NOT_FOUND' });
 
-  const breakdown = [];
-  let totalPrice  = 0;
-  const current   = new Date(checkinDate);
+    const wdMult  = hotelRow[0]?.weekdaymultipliers || {'0':1,'1':1,'2':1,'3':1,'4':1,'5':1,'6':1};
+    const seasons = seasonRows.map(r => db.FROM_DB.seasons(r));
+    const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const basePrice = parseFloat(room.dailyRate);
 
-  while (current < checkoutDate) {
-    const dateStr = current.toISOString().split('T')[0];
-    const dow     = current.getDay(); // 0=domingo
+    const breakdown = [];
+    let totalPrice  = 0;
+    const current   = new Date(checkinDate);
 
-    // Busca a temporada mais específica (maior priceMultiplier) que cobre este dia
-    const activeSeason = seasons
-      .filter(s => dateStr >= s.startDate && dateStr <= s.endDate)
-      .sort((a, b) => b.priceMultiplier - a.priceMultiplier)[0] || null;
+    while (current < checkoutDate) {
+      const dateStr = current.toISOString().split('T')[0];
+      const dow     = current.getDay();
+      const activeSeason = seasons
+        .filter(s => dateStr >= s.startDate && dateStr <= s.endDate)
+        .sort((a, b) => b.priceMultiplier - a.priceMultiplier)[0] || null;
+      const seasonMultiplier  = activeSeason ? parseFloat(activeSeason.priceMultiplier) : 1.0;
+      const weekdayMultiplier = parseFloat(wdMult[String(dow)] ?? 1.0);
+      const finalPrice        = parseFloat((basePrice * seasonMultiplier * weekdayMultiplier).toFixed(2));
+      breakdown.push({ date: dateStr, dayOfWeek: DAY_NAMES[dow], season: activeSeason?.name || null, seasonType: activeSeason?.type || null, seasonMultiplier, weekdayMultiplier, finalPrice });
+      totalPrice += finalPrice;
+      current.setDate(current.getDate() + 1);
+    }
 
-    const seasonMultiplier  = activeSeason ? parseFloat(activeSeason.priceMultiplier) : 1.0;
-    const weekdayMultiplier = parseFloat(wdMult[String(dow)] ?? 1.0);
-    const finalPrice        = parseFloat((basePrice * seasonMultiplier * weekdayMultiplier).toFixed(2));
-
-    breakdown.push({
-      date:              dateStr,
-      dayOfWeek:         DAY_NAMES[dow],
-      season:            activeSeason?.name || null,
-      seasonType:        activeSeason?.type || null,
-      seasonMultiplier,
-      weekdayMultiplier,
-      finalPrice,
+    const totalNights = breakdown.length;
+    res.json({
+      roomNumber: room.roomNumber, roomType: room.roomType, basePrice, totalNights, breakdown,
+      totalPrice: parseFloat(totalPrice.toFixed(2)),
+      averageDailyRate: parseFloat((totalPrice / totalNights).toFixed(2)),
     });
-
-    totalPrice += finalPrice;
-    current.setDate(current.getDate() + 1);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao calcular tarifa', code: 'INTERNAL_ERROR' });
   }
-
-  const totalNights = breakdown.length;
-  res.json({
-    roomNumber:       room.roomNumber,
-    roomType:         room.roomType,
-    basePrice,
-    totalNights,
-    breakdown,
-    totalPrice:       parseFloat(totalPrice.toFixed(2)),
-    averageDailyRate: parseFloat((totalPrice / totalNights).toFixed(2)),
-  });
 });
 
-
-
 // ============ ROUTES: RELATÓRIOS ============
-
-// Helpers de data para os relatórios
 function dateRange(from, to) {
   const dates = [], cur = new Date(from + 'T12:00:00'), end = new Date(to + 'T12:00:00');
   while (cur <= end) { dates.push(cur.toISOString().split('T')[0]); cur.setDate(cur.getDate() + 1); }
@@ -1070,8 +1078,8 @@ function dateRange(from, to) {
 }
 function prevPeriod(from, to) {
   const f = new Date(from + 'T12:00:00'), t = new Date(to + 'T12:00:00');
-  const days = Math.round((t - f) / 86400000);
-  const pTo = new Date(f - 86400000), pFrom = new Date(pTo - days * 86400000);
+  const days  = Math.round((t - f) / 86400000);
+  const pTo   = new Date(f - 86400000), pFrom = new Date(pTo - days * 86400000);
   return { from: pFrom.toISOString().split('T')[0], to: pTo.toISOString().split('T')[0] };
 }
 function parseReportParams(req, res) {
@@ -1082,16 +1090,17 @@ function parseReportParams(req, res) {
   if (from > to) { res.status(400).json({ error: 'from deve ser anterior a to', code: 'INVALID_RANGE' }); return null; }
   return { from, to };
 }
-// Conta room-nights ocupadas num período
-// SQL equiv: SELECT COUNT(*) FROM stays WHERE hotelId=? AND DATE(checkinTime)<=:day AND (checkoutTime IS NULL OR DATE(checkoutTime)>:day) GROUP BY day
-function occupiedRoomNightsInPeriod(hotelId, from, to) {
-  const stays = find('stays', s => s.hotelId === hotelId);
+
+async function occupiedRoomNightsInPeriod(hotelId, from, to) {
+  const stays = await db.q(
+    `SELECT checkintime, checkouttime FROM stays WHERE hotelid = $1`, [hotelId]
+  );
   const dates = dateRange(from, to);
   let total = 0;
   const byDay = dates.map(date => {
     const occ = stays.filter(s => {
-      const cin  = s.checkinTime.split('T')[0];
-      const cout = s.checkoutTime ? s.checkoutTime.split('T')[0] : '9999-12-31';
+      const cin  = new Date(s.checkintime).toISOString().split('T')[0];
+      const cout = s.checkouttime ? new Date(s.checkouttime).toISOString().split('T')[0] : '9999-12-31';
       return cin <= date && cout > date;
     }).length;
     total += occ;
@@ -1100,221 +1109,229 @@ function occupiedRoomNightsInPeriod(hotelId, from, to) {
   return { total, byDay };
 }
 
-// Relatório de ocupação
-app.get('/api/hotels/:hotelId/reports/occupancy', verifyToken, enforceHotelOwnership, (req, res) => {
-  const p = parseReportParams(req, res); if (!p) return;
-  const { hotelId } = req.params;
-  const rooms = find('rooms', r => r.hotelId === hotelId);
-  const totalRooms = rooms.length;
-  const dates = dateRange(p.from, p.to);
-  const totalDaysInPeriod = dates.length;
-
-  const { total: occupiedRoomNights, byDay } = occupiedRoomNightsInPeriod(hotelId, p.from, p.to);
-  const availableRoomNights = totalRooms * totalDaysInPeriod;
-  const occupancyRate = availableRoomNights > 0
-    ? parseFloat((occupiedRoomNights / availableRoomNights * 100).toFixed(2)) : 0;
-
-  const prev = prevPeriod(p.from, p.to);
-  const { total: prevOcc } = occupiedRoomNightsInPeriod(hotelId, prev.from, prev.to);
-  const prevRate = availableRoomNights > 0 ? parseFloat((prevOcc / availableRoomNights * 100).toFixed(2)) : 0;
-
-  res.json({
-    period: p, totalRooms, totalDaysInPeriod,
-    occupiedRoomNights, availableRoomNights,
-    occupancyRate, averageOccupancy: occupancyRate,
-    byDay: byDay.map(d => ({
-      ...d, availableRooms: totalRooms,
-      rate: totalRooms > 0 ? parseFloat((d.occupiedRooms / totalRooms * 100).toFixed(1)) : 0,
-    })),
-    comparison: { previousPeriodRate: prevRate, change: parseFloat((occupancyRate - prevRate).toFixed(2)) },
-  });
-});
-
-// Relatório de receita
-// SQL equiv: SELECT SUM(total), paymentMethod, DATE(createdAt) FROM invoices WHERE hotelId=? AND status='paid' AND createdAt BETWEEN ? AND ? GROUP BY paymentMethod, DATE(createdAt)
-app.get('/api/hotels/:hotelId/reports/revenue', verifyToken, enforceHotelOwnership, (req, res) => {
-  const p = parseReportParams(req, res); if (!p) return;
-  const { hotelId } = req.params;
-
-  const invoices = find('invoices', i =>
-    i.hotelId === hotelId && i.status === 'paid' &&
-    i.createdAt.split('T')[0] >= p.from && i.createdAt.split('T')[0] <= p.to
-  );
-  const totalRevenue = invoices.reduce((s, i) => s + i.total, 0);
-
-  // Agrupa por forma de pagamento
-  const byPaymentMethod = {};
-  for (const inv of invoices)
-    byPaymentMethod[inv.paymentMethod] = (byPaymentMethod[inv.paymentMethod] || 0) + inv.total;
-
-  // Agrupa por tipo de quarto (join stays → rooms)
-  const byRoomType = {};
-  for (const inv of invoices) {
-    const stay = DB.stays.get(inv.stayId);
-    const type = stay ? (DB.rooms.get(stay.roomId)?.roomType || 'outros') : 'outros';
-    byRoomType[type] = (byRoomType[type] || 0) + inv.total;
-  }
-
-  // Agrupa por dia
-  const byDayMap = {};
-  for (const inv of invoices) {
-    const day = inv.createdAt.split('T')[0];
-    byDayMap[day] = (byDayMap[day] || 0) + inv.total;
-  }
-  const byDay = Object.entries(byDayMap).sort().map(([date, revenue]) => ({ date, revenue: parseFloat(revenue.toFixed(2)) }));
-
-  const rooms = find('rooms', r => r.hotelId === hotelId);
-  const dates = dateRange(p.from, p.to);
-  const { total: occNights } = occupiedRoomNightsInPeriod(hotelId, p.from, p.to);
-  const ADR    = occNights > 0   ? parseFloat((totalRevenue / occNights).toFixed(2)) : 0;
-  const revPAR = rooms.length > 0 ? parseFloat((totalRevenue / (rooms.length * dates.length)).toFixed(2)) : 0;
-
-  res.json({
-    period: p,
-    totalRevenue: parseFloat(totalRevenue.toFixed(2)),
-    byPaymentMethod: Object.fromEntries(Object.entries(byPaymentMethod).map(([k,v]) => [k, parseFloat(v.toFixed(2))])),
-    byRoomType:      Object.fromEntries(Object.entries(byRoomType).map(([k,v])      => [k, parseFloat(v.toFixed(2))])),
-    byDay, averageDailyRate: ADR, revPAR,
-  });
-});
-
-// Relatório de hóspedes
-// SQL equiv: JOIN fnrh_records GROUP BY nationality, addressState, purpose + age bucket CASE
-app.get('/api/hotels/:hotelId/reports/guests', verifyToken, enforceHotelOwnership, (req, res) => {
-  const p = parseReportParams(req, res); if (!p) return;
-  const { hotelId } = req.params;
-
-  const stays = find('stays', s =>
-    s.hotelId === hotelId &&
-    s.checkinTime.split('T')[0] >= p.from && s.checkinTime.split('T')[0] <= p.to
-  );
-  const guestIdSet = new Set(stays.map(s => s.guestId));
-  const totalGuests = guestIdSet.size;
-
-  const fnrhs = find('fnrh_records', r =>
-    r.hotelId === hotelId && r.arrivalDate >= p.from && r.arrivalDate <= p.to
-  );
-
-  const byNationality = {}, byOriginState = {}, byPurpose = {};
-  const ageRanges = {'<18':0,'18-25':0,'26-35':0,'36-45':0,'46-55':0,'56-65':0,'>65':0};
-
-  for (const f of fnrhs) {
-    const nat = f.nationality || 'Não informado';
-    byNationality[nat] = (byNationality[nat] || 0) + 1;
-    if (f.addressState) byOriginState[f.addressState] = (byOriginState[f.addressState] || 0) + 1;
-    if (f.purpose)      byPurpose[f.purpose]          = (byPurpose[f.purpose]          || 0) + 1;
-    if (f.birthDate) {
-      const age = Math.floor((Date.now() - new Date(f.birthDate)) / (365.25 * 86400000));
-      if      (age < 18)  ageRanges['<18']++;
-      else if (age <= 25) ageRanges['18-25']++;
-      else if (age <= 35) ageRanges['26-35']++;
-      else if (age <= 45) ageRanges['36-45']++;
-      else if (age <= 55) ageRanges['46-55']++;
-      else if (age <= 65) ageRanges['56-65']++;
-      else                ageRanges['>65']++;
-    }
-  }
-
-  const avgDuration = stays.length > 0
-    ? parseFloat((stays.reduce((s, st) => s + st.numberOfNights, 0) / stays.length).toFixed(1)) : 0;
-  const vipGuests = find('guests', g => g.hotelId === hotelId && guestIdSet.has(g.id) && (g.vipScore || 0) > 50).length;
-
-  res.json({ period: p, totalGuests, byNationality, byOriginState, byAgeRange: ageRanges, byPurpose, averageStayDuration: avgDuration, vipGuests });
-});
-
-// Relatório de performance das faxineiras
-// SQL equiv: SELECT assignedTo, COUNT(*), AVG(actualMinutes), AVG(score), SUM(passed)/COUNT(*) FROM cleaning_tasks LEFT JOIN cleaning_inspections GROUP BY assignedTo
-app.get('/api/hotels/:hotelId/reports/staff-performance', verifyToken, enforceHotelOwnership, (req, res) => {
-  const p = parseReportParams(req, res); if (!p) return;
-  const { hotelId } = req.params;
-
-  const staff = find('cleaning_staff', s => s.hotelId === hotelId);
-  const result = staff.map(s => {
-    const tasks = find('cleaning_tasks', t =>
-      t.assignedTo === s.id &&
-      ['done','inspected','inspection_failed'].includes(t.status) &&
-      t.completedAt && t.completedAt.split('T')[0] >= p.from &&
-      t.completedAt.split('T')[0] <= p.to
-    );
-    const tasksCompleted = tasks.length;
-    const avgMin = tasksCompleted > 0
-      ? parseFloat((tasks.filter(t => t.actualMinutes).reduce((sum, t) => sum + t.actualMinutes, 0) / tasksCompleted).toFixed(1)) : 0;
-    const taskIds = new Set(tasks.map(t => t.id));
-    const inspections = find('cleaning_inspections', i => taskIds.has(i.taskId));
-    const totalInsp = inspections.length;
-    const avgScore  = totalInsp > 0 ? parseFloat((inspections.reduce((s, i) => s + (i.score || 0), 0) / totalInsp).toFixed(1)) : null;
-    const passRate  = totalInsp > 0 ? parseFloat((inspections.filter(i => i.passed).length / totalInsp * 100).toFixed(1)) : null;
-    return { id: s.id, name: s.name, tasksCompleted, averageMinutes: avgMin, inspectionScore: avgScore, passRate };
-  });
-
-  res.json({ period: p, staff: result });
-});
-
-// Relatório financeiro consolidado
-// SQL equiv: combina SUM(invoices) + ocupação calculada + métricas KPI hoteleiras (ADR, RevPAR)
-app.get('/api/hotels/:hotelId/reports/financial', verifyToken, enforceHotelOwnership, (req, res) => {
-  const p = parseReportParams(req, res); if (!p) return;
-  const { hotelId } = req.params;
-
-  const invoices = find('invoices', i =>
-    i.hotelId === hotelId && i.status === 'paid' &&
-    i.createdAt.split('T')[0] >= p.from && i.createdAt.split('T')[0] <= p.to
-  );
-  const revenue   = parseFloat(invoices.reduce((s, i) => s + i.total, 0).toFixed(2));
-  const avgTicket = invoices.length > 0 ? parseFloat((revenue / invoices.length).toFixed(2)) : 0;
-
-  const rooms = find('rooms', r => r.hotelId === hotelId);
-  const dates = dateRange(p.from, p.to);
-  const { total: occNights } = occupiedRoomNightsInPeriod(hotelId, p.from, p.to);
-  const availNights = rooms.length * dates.length;
-  const occRate = availNights > 0 ? parseFloat((occNights / availNights * 100).toFixed(2)) : 0;
-  const ADR     = occNights > 0   ? parseFloat((revenue / occNights).toFixed(2)) : 0;
-  const revPAR  = availNights > 0 ? parseFloat((revenue / availNights).toFixed(2)) : 0;
-
-  const prev = prevPeriod(p.from, p.to);
-  const prevInv = find('invoices', i =>
-    i.hotelId === hotelId && i.status === 'paid' &&
-    i.createdAt.split('T')[0] >= prev.from && i.createdAt.split('T')[0] <= prev.to
-  );
-  const prevRevenue = parseFloat(prevInv.reduce((s, i) => s + i.total, 0).toFixed(2));
-  const { total: prevOcc } = occupiedRoomNightsInPeriod(hotelId, prev.from, prev.to);
-  const prevOccRate = availNights > 0 ? parseFloat((prevOcc / availNights * 100).toFixed(2)) : 0;
-
-  res.json({
-    period: p, revenue, expenses: 0, profit: revenue,
-    averageTicket: avgTicket, occupancyRate: occRate, ADR, revPAR,
-    comparison: {
-      previousPeriod:  prev, previousRevenue: prevRevenue,
-      revenueChange:   parseFloat((revenue - prevRevenue).toFixed(2)),
-      previousOccRate: prevOccRate,
-      occupancyChange: parseFloat((occRate - prevOccRate).toFixed(2)),
-    },
-  });
-});
-
-// Cria registro FNRH
-app.post('/api/hotels/:hotelId/fnrh', verifyToken, enforceHotelOwnership, (req, res) => {
+app.get('/api/hotels/:hotelId/reports/occupancy', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
-    const data = FNRHSchema.parse(req.body);
+    const p = parseReportParams(req, res); if (!p) return;
     const { hotelId } = req.params;
 
-    // Verifica se stay pertence ao hotel
-    const stay = DB.stays.get(data.stayId);
+    const [[{ cnt: totalRooms }], { total: occupiedRoomNights, byDay }] = await Promise.all([
+      db.q('SELECT COUNT(*)::int AS cnt FROM rooms WHERE hotelid = $1', [hotelId]),
+      occupiedRoomNightsInPeriod(hotelId, p.from, p.to),
+    ]);
+
+    const dates           = dateRange(p.from, p.to);
+    const totalDays       = dates.length;
+    const availNights     = totalRooms * totalDays;
+    const occupancyRate   = availNights > 0 ? parseFloat((occupiedRoomNights / availNights * 100).toFixed(2)) : 0;
+
+    const prev = prevPeriod(p.from, p.to);
+    const { total: prevOcc } = await occupiedRoomNightsInPeriod(hotelId, prev.from, prev.to);
+    const prevRate = availNights > 0 ? parseFloat((prevOcc / availNights * 100).toFixed(2)) : 0;
+
+    res.json({
+      period: p, totalRooms, totalDaysInPeriod: totalDays,
+      occupiedRoomNights, availableRoomNights: availNights,
+      occupancyRate, averageOccupancy: occupancyRate,
+      byDay: byDay.map(d => ({ ...d, availableRooms: totalRooms, rate: totalRooms > 0 ? parseFloat((d.occupiedRooms / totalRooms * 100).toFixed(1)) : 0 })),
+      comparison: { previousPeriodRate: prevRate, change: parseFloat((occupancyRate - prevRate).toFixed(2)) },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro no relatório de ocupação', code: 'INTERNAL_ERROR' });
+  }
+});
+
+app.get('/api/hotels/:hotelId/reports/revenue', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const p = parseReportParams(req, res); if (!p) return;
+    const { hotelId } = req.params;
+
+    const [invoiceRows, [{ cnt: roomCount }], stayRows] = await Promise.all([
+      db.q(`SELECT i.*, s.roomid FROM invoices i LEFT JOIN stays s ON s.id = i.stayid WHERE i.hotelid = $1 AND i.status = 'paid' AND DATE(i.createdat) BETWEEN $2 AND $3`, [hotelId, p.from, p.to]),
+      db.q('SELECT COUNT(*)::int AS cnt FROM rooms WHERE hotelid = $1', [hotelId]),
+      db.q('SELECT id, roomid FROM stays WHERE hotelid = $1', [hotelId]),
+    ]);
+    const roomRows = await db.q('SELECT id, roomtype FROM rooms WHERE hotelid = $1', [hotelId]);
+    const roomTypeMap = Object.fromEntries(roomRows.map(r => [r.id, r.roomtype]));
+
+    const invoices     = invoiceRows.map(r => ({ ...db.FROM_DB.invoices(r), roomId: r.roomid }));
+    const totalRevenue = invoices.reduce((s, i) => s + (i.total || 0), 0);
+
+    const byPaymentMethod = {}, byRoomType = {}, byDayMap = {};
+    for (const inv of invoices) {
+      byPaymentMethod[inv.paymentMethod] = (byPaymentMethod[inv.paymentMethod] || 0) + inv.total;
+      const type = roomTypeMap[inv.roomId] || 'outros';
+      byRoomType[type] = (byRoomType[type] || 0) + inv.total;
+      const day = inv.createdAt.split('T')[0];
+      byDayMap[day] = (byDayMap[day] || 0) + inv.total;
+    }
+    const byDay = Object.entries(byDayMap).sort().map(([date, revenue]) => ({ date, revenue: parseFloat(revenue.toFixed(2)) }));
+    const { total: occNights } = await occupiedRoomNightsInPeriod(hotelId, p.from, p.to);
+    const dates  = dateRange(p.from, p.to);
+    const ADR    = occNights > 0   ? parseFloat((totalRevenue / occNights).toFixed(2)) : 0;
+    const revPAR = roomCount > 0   ? parseFloat((totalRevenue / (roomCount * dates.length)).toFixed(2)) : 0;
+
+    res.json({
+      period: p, totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+      byPaymentMethod: Object.fromEntries(Object.entries(byPaymentMethod).map(([k,v]) => [k, parseFloat(v.toFixed(2))])),
+      byRoomType: Object.fromEntries(Object.entries(byRoomType).map(([k,v]) => [k, parseFloat(v.toFixed(2))])),
+      byDay, averageDailyRate: ADR, revPAR,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro no relatório de receita', code: 'INTERNAL_ERROR' });
+  }
+});
+
+app.get('/api/hotels/:hotelId/reports/guests', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const p = parseReportParams(req, res); if (!p) return;
+    const { hotelId } = req.params;
+
+    const [stayRows, fnrhRows, vipRows] = await Promise.all([
+      db.q(`SELECT guestid FROM stays WHERE hotelid = $1 AND DATE(checkintime) BETWEEN $2 AND $3`, [hotelId, p.from, p.to]),
+      db.q(`SELECT * FROM fnrh_records WHERE hotelid = $1 AND arrivaldate BETWEEN $2 AND $3`, [hotelId, p.from, p.to]),
+      db.q(`SELECT COUNT(*)::int AS cnt FROM guests WHERE hotelid = $1 AND vipscore > 50`, [hotelId]),
+    ]);
+
+    const guestIdSet   = new Set(stayRows.map(s => s.guestid));
+    const totalGuests  = guestIdSet.size;
+    const fnrhs        = fnrhRows.map(r => db.FROM_DB.fnrh_records(r));
+
+    const byNationality = {}, byOriginState = {}, byPurpose = {};
+    const ageRanges = {'<18':0,'18-25':0,'26-35':0,'36-45':0,'46-55':0,'56-65':0,'>65':0};
+
+    for (const f of fnrhs) {
+      const nat = f.nationality || 'Não informado';
+      byNationality[nat] = (byNationality[nat] || 0) + 1;
+      if (f.addressState) byOriginState[f.addressState] = (byOriginState[f.addressState] || 0) + 1;
+      if (f.purpose)      byPurpose[f.purpose]          = (byPurpose[f.purpose]          || 0) + 1;
+      if (f.birthDate) {
+        const age = Math.floor((Date.now() - new Date(f.birthDate)) / (365.25 * 86400000));
+        if      (age < 18)  ageRanges['<18']++;
+        else if (age <= 25) ageRanges['18-25']++;
+        else if (age <= 35) ageRanges['26-35']++;
+        else if (age <= 45) ageRanges['36-45']++;
+        else if (age <= 55) ageRanges['46-55']++;
+        else if (age <= 65) ageRanges['56-65']++;
+        else                ageRanges['>65']++;
+      }
+    }
+
+    const staysFull = await db.q(`SELECT numberofnights FROM stays WHERE hotelid = $1 AND DATE(checkintime) BETWEEN $2 AND $3`, [hotelId, p.from, p.to]);
+    const avgDuration = staysFull.length > 0
+      ? parseFloat((staysFull.reduce((s, st) => s + (st.numberofnights || 0), 0) / staysFull.length).toFixed(1)) : 0;
+
+    res.json({ period: p, totalGuests, byNationality, byOriginState, byAgeRange: ageRanges, byPurpose, averageStayDuration: avgDuration, vipGuests: vipRows[0]?.cnt || 0 });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro no relatório de hóspedes', code: 'INTERNAL_ERROR' });
+  }
+});
+
+app.get('/api/hotels/:hotelId/reports/staff-performance', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const p = parseReportParams(req, res); if (!p) return;
+    const { hotelId } = req.params;
+
+    const [staffRows, taskRows, inspectionRows] = await Promise.all([
+      db.q('SELECT * FROM cleaning_staff WHERE hotelid = $1', [hotelId]),
+      db.q(`SELECT * FROM cleaning_tasks WHERE hotelid = $1 AND status IN ('done','inspected','inspection_failed') AND completedat IS NOT NULL AND DATE(completedat) BETWEEN $2 AND $3`, [hotelId, p.from, p.to]),
+      db.q(`SELECT ci.* FROM cleaning_inspections ci JOIN cleaning_tasks ct ON ct.id = ci.taskid WHERE ct.hotelid = $1`, [hotelId]),
+    ]);
+
+    const tasksByStaff   = {};
+    for (const t of taskRows) {
+      if (!tasksByStaff[t.assignedto]) tasksByStaff[t.assignedto] = [];
+      tasksByStaff[t.assignedto].push(t);
+    }
+    const inspByTask = {};
+    for (const i of inspectionRows) {
+      if (!inspByTask[i.taskid]) inspByTask[i.taskid] = [];
+      inspByTask[i.taskid].push(i);
+    }
+
+    const result = staffRows.map(s => {
+      const tasks         = tasksByStaff[s.id] || [];
+      const tasksCompleted = tasks.length;
+      const avgMin        = tasksCompleted > 0 ? parseFloat((tasks.filter(t => t.actualminutes).reduce((sum, t) => sum + t.actualminutes, 0) / tasksCompleted).toFixed(1)) : 0;
+      const inspections   = tasks.flatMap(t => inspByTask[t.id] || []);
+      const totalInsp     = inspections.length;
+      const avgScore      = totalInsp > 0 ? parseFloat((inspections.reduce((sum, i) => sum + (i.score || 0), 0) / totalInsp).toFixed(1)) : null;
+      const passRate      = totalInsp > 0 ? parseFloat((inspections.filter(i => i.passed).length / totalInsp * 100).toFixed(1)) : null;
+      return { id: s.id, name: s.name, tasksCompleted, averageMinutes: avgMin, inspectionScore: avgScore, passRate };
+    });
+
+    res.json({ period: p, staff: result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro no relatório de performance', code: 'INTERNAL_ERROR' });
+  }
+});
+
+app.get('/api/hotels/:hotelId/reports/financial', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const p = parseReportParams(req, res); if (!p) return;
+    const { hotelId } = req.params;
+
+    const [invoiceRows, [{ cnt: roomCount }]] = await Promise.all([
+      db.q(`SELECT totalvalue, createdat FROM invoices WHERE hotelid = $1 AND status = 'paid' AND DATE(createdat) BETWEEN $2 AND $3`, [hotelId, p.from, p.to]),
+      db.q('SELECT COUNT(*)::int AS cnt FROM rooms WHERE hotelid = $1', [hotelId]),
+    ]);
+
+    const revenue   = parseFloat(invoiceRows.reduce((s, i) => s + parseFloat(i.totalvalue || 0), 0).toFixed(2));
+    const avgTicket = invoiceRows.length > 0 ? parseFloat((revenue / invoiceRows.length).toFixed(2)) : 0;
+
+    const dates     = dateRange(p.from, p.to);
+    const { total: occNights } = await occupiedRoomNightsInPeriod(hotelId, p.from, p.to);
+    const availNights = roomCount * dates.length;
+    const occRate     = availNights > 0 ? parseFloat((occNights / availNights * 100).toFixed(2)) : 0;
+    const ADR         = occNights > 0   ? parseFloat((revenue / occNights).toFixed(2)) : 0;
+    const revPAR      = availNights > 0 ? parseFloat((revenue / availNights).toFixed(2)) : 0;
+
+    const prev = prevPeriod(p.from, p.to);
+    const [prevInvRows] = await Promise.all([
+      db.q(`SELECT totalvalue FROM invoices WHERE hotelid = $1 AND status = 'paid' AND DATE(createdat) BETWEEN $2 AND $3`, [hotelId, prev.from, prev.to]),
+    ]);
+    const prevRevenue = parseFloat(prevInvRows.reduce((s, i) => s + parseFloat(i.totalvalue || 0), 0).toFixed(2));
+    const { total: prevOcc } = await occupiedRoomNightsInPeriod(hotelId, prev.from, prev.to);
+    const prevOccRate = availNights > 0 ? parseFloat((prevOcc / availNights * 100).toFixed(2)) : 0;
+
+    res.json({
+      period: p, revenue, expenses: 0, profit: revenue,
+      averageTicket: avgTicket, occupancyRate: occRate, ADR, revPAR,
+      comparison: {
+        previousPeriod: prev, previousRevenue: prevRevenue,
+        revenueChange:  parseFloat((revenue - prevRevenue).toFixed(2)),
+        previousOccRate: prevOccRate,
+        occupancyChange: parseFloat((occRate - prevOccRate).toFixed(2)),
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro no relatório financeiro', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// ============ ROUTES: FNRH ============
+app.post('/api/hotels/:hotelId/fnrh', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const data      = FNRHSchema.parse(req.body);
+    const { hotelId } = req.params;
+
+    const stay = await db.getById('stays', data.stayId);
     if (!stay || stay.hotelId !== hotelId)
       return res.status(404).json({ error: 'Hospedagem não encontrada', code: 'NOT_FOUND' });
-    // Garante que guestId corresponde ao hóspede da hospedagem
     if (stay.guestId !== data.guestId)
       return res.status(422).json({ error: 'Hóspede não corresponde à hospedagem', code: 'GUEST_STAY_MISMATCH' });
 
-    // Evita duplicata por stayId
-    const existing = findOne('fnrh_records', r => r.stayId === data.stayId);
+    const [existing] = await db.q('SELECT id FROM fnrh_records WHERE stayid = $1 LIMIT 1', [data.stayId]);
     if (existing)
       return res.status(409).json({ error: 'FNRH já registrado para esta hospedagem', code: 'DUPLICATE', id: existing.id });
 
-    const record = put('fnrh_records', {
+    const record = await db.insert('fnrh_records', {
       id: randomUUID(), hotelId, ...data,
       exportedToSismatur: false, exportedAt: null,
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     });
     res.status(201).json(record);
   } catch (err) {
@@ -1324,54 +1341,53 @@ app.post('/api/hotels/:hotelId/fnrh', verifyToken, enforceHotelOwnership, (req, 
   }
 });
 
-// Lista FNRHs com filtro por mês e exportação pendente — paginado (page/limit)
-app.get('/api/hotels/:hotelId/fnrh', verifyToken, enforceHotelOwnership, (req, res) => {
-  const { hotelId } = req.params;
-  const { month, exported, page = '1', limit = '20' } = req.query;
+app.get('/api/hotels/:hotelId/fnrh', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const { month, exported, page = '1', limit = '20' } = req.query;
 
-  let records = find('fnrh_records', r => r.hotelId === hotelId);
+    let sql    = 'SELECT * FROM fnrh_records WHERE hotelid = $1';
+    const params = [hotelId];
 
-  // Filtra por mês (YYYY-MM) comparando arrivalDate
-  if (month) records = records.filter(r => r.arrivalDate.startsWith(month));
+    if (month)    { sql += ` AND TO_CHAR(arrivaldate,'YYYY-MM') = $${params.push(month)}`; }
+    if (exported !== undefined) { sql += ` AND exportedtosismatur = $${params.push(exported === 'true')}`; }
+    sql += ' ORDER BY arrivaldate DESC';
 
-  // Filtra por status de exportação
-  if (exported !== undefined)
-    records = records.filter(r => r.exportedToSismatur === (exported === 'true'));
+    const rows     = await db.q(sql, params);
+    const records  = rows.map(r => db.FROM_DB.fnrh_records(r));
+    const total    = records.length;
+    const pageNum  = Math.max(1, parseInt(page));
+    const lim      = Math.min(100, Math.max(1, parseInt(limit)));
+    const data     = records.slice((pageNum - 1) * lim, pageNum * lim);
 
-  // Ordena por arrivalDate desc
-  records.sort((a, b) => b.arrivalDate.localeCompare(a.arrivalDate));
-
-  // Paginação simples
-  const total   = records.length;
-  const pageNum = Math.max(1, parseInt(page));
-  const lim     = Math.min(100, Math.max(1, parseInt(limit)));
-  const data    = records.slice((pageNum - 1) * lim, pageNum * lim);
-
-  res.json({ total, page: pageNum, limit: lim, pages: Math.ceil(total / lim), data });
+    res.json({ total, page: pageNum, limit: lim, pages: Math.ceil(total / lim), data });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao listar FNRHs', code: 'INTERNAL_ERROR' });
+  }
 });
 
-// Edita registro FNRH
-app.put('/api/hotels/:hotelId/fnrh/:recordId', verifyToken, enforceHotelOwnership, (req, res) => {
+app.put('/api/hotels/:hotelId/fnrh/:recordId', verifyToken, enforceHotelOwnership, async (req, res) => {
   try {
-    const record = DB.fnrh_records.get(req.params.recordId);
+    const record = await db.getById('fnrh_records', req.params.recordId);
     if (!record || record.hotelId !== req.params.hotelId)
       return res.status(404).json({ error: 'Registro não encontrado', code: 'NOT_FOUND' });
     if (record.exportedToSismatur)
       return res.status(400).json({ error: 'Registro já exportado não pode ser editado', code: 'ALREADY_EXPORTED' });
 
-    const updates = FNRHPartialSchema.parse(req.body);
-    // Se stayId ou guestId for alterado, revalida o par
-    const newStayId   = updates.stayId   || record.stayId;
-    const newGuestId  = updates.guestId  || record.guestId;
+    const updates    = FNRHPartialSchema.parse(req.body);
+    const newStayId  = updates.stayId  || record.stayId;
+    const newGuestId = updates.guestId || record.guestId;
+
     if (updates.stayId || updates.guestId) {
-      const stay = DB.stays.get(newStayId);
+      const stay = await db.getById('stays', newStayId);
       if (!stay || stay.hotelId !== req.params.hotelId)
         return res.status(404).json({ error: 'Hospedagem não encontrada', code: 'NOT_FOUND' });
       if (stay.guestId !== newGuestId)
         return res.status(422).json({ error: 'Hóspede não corresponde à hospedagem', code: 'GUEST_STAY_MISMATCH' });
     }
-    Object.assign(record, updates, { updatedAt: new Date().toISOString() });
-    res.json(record);
+
+    const updated = await db.update('fnrh_records', req.params.recordId, { ...updates, updatedAt: new Date().toISOString() });
+    res.json(updated);
   } catch (err) {
     if (err instanceof z.ZodError)
       return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR', details: err.errors });
@@ -1379,49 +1395,55 @@ app.put('/api/hotels/:hotelId/fnrh/:recordId', verifyToken, enforceHotelOwnershi
   }
 });
 
-// Exporta FNRH no formato SISMATUR (TXT pipe-separated)
-app.get('/api/hotels/:hotelId/fnrh/export', verifyToken, enforceHotelOwnership, (req, res) => {
-  const { hotelId } = req.params;
-  const { month } = req.query;
+app.get('/api/hotels/:hotelId/fnrh/export', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const { month }   = req.query;
 
-  let records = find('fnrh_records', r => r.hotelId === hotelId && !r.exportedToSismatur);
-  if (month) records = records.filter(r => r.arrivalDate.startsWith(month));
+    let sql    = `SELECT * FROM fnrh_records WHERE hotelid = $1 AND exportedtosismatur = false`;
+    const params = [hotelId];
+    if (month) { sql += ` AND TO_CHAR(arrivaldate,'YYYY-MM') = $${params.push(month)}`; }
 
-  if (!records.length)
-    return res.status(404).json({ error: 'Nenhum registro pendente de exportação', code: 'NOT_FOUND' });
+    const rows    = await db.q(sql, params);
+    const records = rows.map(r => db.FROM_DB.fnrh_records(r));
 
-  // Monta linhas no padrão SISMATUR
-  const lines = records.map(r => [
-    removeAccents(r.fullName),
-    r.documentNumber.replace(/\D/g, ''),
-    fmtDate(r.birthDate),
-    removeAccents(r.nationality || 'BRASILEIRO'),
-    removeAccents(r.profession || ''),
-    removeAccents(`${r.addressStreet || ''} ${r.addressNumber || ''}`.trim()),
-    removeAccents(r.addressCity || ''),
-    (r.addressState || '').toUpperCase(),
-    (r.addressZipcode || '').replace(/\D/g, ''),
-    fmtDate(r.arrivalDate),
-    fmtDate(r.departureDate),
-    removeAccents(r.purpose || ''),
-    removeAccents(r.originCity || ''),
-    removeAccents(r.destinationCity || ''),
-    removeAccents(r.transportMethod || ''),
-  ].join('|'));
+    if (!records.length)
+      return res.status(404).json({ error: 'Nenhum registro pendente de exportação', code: 'NOT_FOUND' });
 
-  // Marca como exportados
-  const now = new Date().toISOString();
-  records.forEach(r => { r.exportedToSismatur = true; r.exportedAt = now; });
+    const lines = records.map(r => [
+      removeAccents(r.fullName),
+      r.documentNumber.replace(/\D/g, ''),
+      fmtDate(r.birthDate),
+      removeAccents(r.nationality || 'BRASILEIRO'),
+      removeAccents(r.profession || ''),
+      removeAccents(`${r.addressStreet || ''} ${r.addressNumber || ''}`.trim()),
+      removeAccents(r.addressCity || ''),
+      (r.addressState || '').toUpperCase(),
+      (r.addressZipcode || '').replace(/\D/g, ''),
+      fmtDate(r.arrivalDate),
+      fmtDate(r.departureDate),
+      removeAccents(r.purpose || ''),
+      removeAccents(r.originCity || ''),
+      removeAccents(r.destinationCity || ''),
+      removeAccents(r.transportMethod || ''),
+    ].join('|'));
 
-  // Sanitiza month para uso seguro no nome de arquivo (apenas dígitos e hífens)
-  const safeMonth = month ? month.replace(/[^0-9-]/g, '').replace('-', '') : null;
-  const filename = safeMonth
-    ? `fnrh_${safeMonth}.txt`
-    : `fnrh_${new Date().toISOString().slice(0,7).replace('-','')}.txt`;
+    // Marca como exportados em batch (usa supabase-js .in() — exec_sql não suporta uuid[])
+    const now = new Date().toISOString();
+    const ids = records.map(r => r.id);
+    await db.supabase.from('fnrh_records')
+      .update({ exportedtosismatur: true, exportedat: now }).in('id', ids);
 
-  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.send(lines.join('\n'));
+    const safeMonth = month ? month.replace(/[^0-9-]/g, '').replace('-', '') : null;
+    const filename  = safeMonth ? `fnrh_${safeMonth}.txt` : `fnrh_${new Date().toISOString().slice(0,7).replace('-','')}.txt`;
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(lines.join('\n'));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao exportar FNRH', code: 'INTERNAL_ERROR' });
+  }
 });
 
 // ============ ROOT & STATIC ============
@@ -1435,14 +1457,19 @@ app.get('/sw.js', (req, res) => {
   res.setHeader('Service-Worker-Allowed', '/');
   res.sendFile(path.join(__dirname, 'sw.js'));
 });
-app.get('/api/status', (req, res) => res.json({ name: 'LOBBY Backend', status: 'running', mode: 'demo' }));
+app.get('/api/status', (req, res) => res.json({ name: 'LOBBY Backend', status: 'running', mode: 'supabase' }));
 
 // ============ SERVER START ============
 const PORT = process.env.PORT || 10000;
-seedDatabase().then(() => {
-  app.listen(PORT, () => {
-    console.log(`🚀 LOBBY Backend v2 rodando na porta ${PORT}`);
-    console.log(`📋 Modo: ${NODE_ENV} (in-memory demo)`);
-    console.log(`🌍 CORS permitido: ${ALLOWED_ORIGINS.join(', ')}`);
+seedDatabase()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`🚀 LOBBY Backend v3 rodando na porta ${PORT}`);
+      console.log(`📦 Modo: ${NODE_ENV} (Supabase PostgreSQL)`);
+      console.log(`🌍 CORS permitido: ${ALLOWED_ORIGINS.join(', ')}`);
+    });
+  })
+  .catch(err => {
+    console.error('❌ Falha ao inicializar banco:', err.message);
+    process.exit(1);
   });
-}).catch(err => { console.error('Erro ao inicializar seed:', err); process.exit(1); });

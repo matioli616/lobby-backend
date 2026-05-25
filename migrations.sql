@@ -1,3 +1,4 @@
+
 -- ============================================================
 -- LOBBY v3 — MIGRATIONS
 -- Executar manualmente no Supabase SQL Editor
