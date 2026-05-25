@@ -173,6 +173,18 @@ input, select { font-family: inherit; }
   .period-row { flex-direction: column; align-items: flex-start; }
   .kpi-grid { grid-template-columns: 1fr 1fr; }
 }
+/* --- Status chips de reserva --- */
+.chip-confirmed  { background: rgba(59,130,246,0.12);  color: var(--accent); }
+.chip-checked_in { background: rgba(16,185,129,0.18);  color: var(--success); font-weight:700; }
+.chip-cancelled  { background: rgba(113,113,122,0.15); color: var(--text-dim); }
+.chip-no_show    { background: rgba(239,68,68,0.12);   color: var(--danger); }
+/* --- Grid de disponibilidade de quartos --- */
+.avail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap:8px; margin-top:8px; }
+.avail-card { padding:10px 12px; border-radius:var(--radius-sm); border:2px solid var(--border); cursor:pointer; transition:all 0.15s; }
+.avail-card.avail-ok:hover    { border-color:var(--accent); }
+.avail-card.avail-ok.selected { border-color:var(--accent); background:rgba(59,130,246,0.08); }
+.avail-card.avail-no  { opacity:0.4; cursor:not-allowed; }
+.avail-card small { display:block; font-size:11px; color:var(--text-dim); margin-top:2px; }
 </style>
 </head>
 <body>
@@ -202,6 +214,7 @@ input, select { font-family: inherit; }
     <div class="logo">LOBBY</div>
     <nav class="nav">
       <button class="nav-item active" data-page="dashboard"><span class="nav-icon">▦</span> Dashboard</button>
+      <button class="nav-item" data-page="reservations"><span class="nav-icon">⊞</span> Reservas</button>
       <button class="nav-item" data-page="checkin"><span class="nav-icon">→</span> Check-in</button>
       <button class="nav-item" data-page="checkout"><span class="nav-icon">←</span> Check-out</button>
       <button class="nav-item" data-page="rooms"><span class="nav-icon">▥</span> Quartos</button>
@@ -280,6 +293,28 @@ input, select { font-family: inherit; }
         <button class="btn btn-primary btn-block" id="checkoutBtn">Finalizar check-out</button>
       </div>
     </section>
+    <!-- RESERVAS -->
+    <section class="page" id="page-reservations">
+      <div class="page-header">
+        <div><h1 class="page-title">Reservas</h1><p class="page-subtitle">Gerencie reservas antecipadas e confirme check-ins</p></div>
+        <button class="btn btn-primary" id="newResBtn">+ Nova Reserva</button>
+      </div>
+      <div class="period-row" style="margin-bottom:16px">
+        <select class="form-select" id="resStatusFilter" style="width:auto">
+          <option value="">Todos os status</option>
+          <option value="confirmed">Confirmadas</option>
+          <option value="checked_in">Check-in feito</option>
+          <option value="cancelled">Canceladas</option>
+        </select>
+        <label style="font-size:12px;color:var(--text-muted)">De</label>
+        <input type="date" id="resFromFilter" class="form-input" style="width:160px">
+        <label style="font-size:12px;color:var(--text-muted)">Até</label>
+        <input type="date" id="resToFilter" class="form-input" style="width:160px">
+        <button class="btn btn-ghost" id="resFilterBtn">Filtrar</button>
+      </div>
+      <div id="resList"></div>
+    </section>
+
     <section class="page" id="page-rooms">
       <div class="page-header"><div><h1 class="page-title">Quartos</h1><p class="page-subtitle" id="roomsSubtitle">Visão geral de todos os quartos</p></div></div>
       <div class="rooms-grid" id="roomsFullGrid"></div>
@@ -509,6 +544,51 @@ input, select { font-family: inherit; }
     </div>
   </div>
 </div>
+<!-- Modal: Reserva -->
+<div class="modal-overlay" id="resModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 class="modal-title" id="resModalTitle">Nova Reserva</h3>
+      <button class="modal-close" id="resModalClose">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">CPF do hóspede</label>
+          <input type="text" class="form-input" id="resCpf" placeholder="000.000.000-00" maxlength="14" inputmode="numeric">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Nome</label>
+          <input type="text" class="form-input" id="resGuestName" placeholder="Nome completo" maxlength="120">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Check-in</label>
+          <input type="date" class="form-input" id="resCheckin">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Check-out</label>
+          <input type="date" class="form-input" id="resCheckout">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Quartos disponíveis</label>
+        <div class="avail-grid" id="resRoomGrid"><p style="color:var(--text-dim);font-size:12px;padding:8px 0">Selecione as datas para ver disponibilidade</p></div>
+        <input type="hidden" id="resRoomId">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Pedidos especiais (opcional)</label>
+        <input type="text" class="form-input" id="resRequests" placeholder="Ex: cama extra, vista para o mar..." maxlength="500">
+      </div>
+      <div id="resPriceSummary" style="display:none;margin-top:4px;padding:12px 14px;background:var(--bg-soft);border-radius:var(--radius-sm);font-size:13px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="resModalCancel">Cancelar</button>
+      <button class="btn btn-primary" id="resModalSave">Reservar</button>
+    </div>
+  </div>
+</div>
 <!-- Modal: FNRH (largo) -->
 <div class="modal-overlay" id="fnrhModal">
   <div class="modal modal-wide">
@@ -521,6 +601,7 @@ input, select { font-family: inherit; }
 'use strict';
 const API_URL = '';
 const state = { user: null, hotelId: null, token: null, rooms: [], guests: [], currentStay: null };
+var resState = { list: [], editing: null };
 
 function $(id) { return document.getElementById(id); }
 
@@ -1474,15 +1555,195 @@ function switchPage(pageName) {
   document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
   $('page-' + pageName).classList.add('active');
   document.querySelector('.nav-item[data-page="' + pageName + '"]').classList.add('active');
-  if (pageName === 'dashboard') { loadDashboard(); loadRooms(); }
-  if (pageName === 'rooms')    loadRooms();
-  if (pageName === 'guests')   loadGuests();
+  if (pageName === 'dashboard')    { loadDashboard(); loadRooms(); }
+  if (pageName === 'rooms')        loadRooms();
+  if (pageName === 'guests')       loadGuests();
   if (pageName === 'checkin' || pageName === 'checkout') loadRooms();
+  if (pageName === 'reservations') loadReservations();
   if (pageName === 'gov')     { loadGov(); }
   if (pageName === 'tariff')  { loadTariff(); }
   if (pageName === 'fnrh')    { loadFNRH(); }
   if (pageName === 'reports') { initReports(); }
   $('sidebar').classList.remove('open');
+}
+
+// ===== RESERVAS =====
+var RES_STATUS = { confirmed:'Confirmada', checked_in:'Check-in feito', cancelled:'Cancelada', no_show:'No-show' };
+
+async function loadReservations() {
+  var status = $('resStatusFilter').value;
+  var from   = $('resFromFilter').value;
+  var to     = $('resToFilter').value;
+  var qs = '?';
+  if (status) qs += 'status='+status+'&';
+  if (from)   qs += 'from='+from+'&';
+  if (to)     qs += 'to='+to+'&';
+  try {
+    resState.list = await api('/api/hotels/'+state.hotelId+'/reservations'+qs);
+    renderReservations();
+  } catch(e) { toast('Erro ao carregar reservas: '+e.message, 'error'); }
+}
+
+function renderReservations() {
+  var c = $('resList'); clear(c);
+  if (!resState.list.length) {
+    c.appendChild(el('div', {class:'empty', text:'Nenhuma reserva encontrada'}));
+    return;
+  }
+  var wrap = el('div', {class:'list', style:'overflow-x:auto'});
+  var t = el('table', {class:'data-table'});
+  var thead = el('thead');
+  thead.appendChild(el('tr', {}, ['Hóspede','Quarto','Check-in','Check-out','Noites','Total','Status','Ações'].map(function(h){ return el('th',{text:h}); })));
+  t.appendChild(thead);
+  var tbody = el('tbody');
+  resState.list.forEach(function(r) {
+    var chipCls = 'status-chip chip-'+(r.status||'confirmed');
+    var statusLabel = RES_STATUS[r.status] || r.status;
+    var actions = el('td', {style:'display:flex;gap:6px;flex-wrap:wrap'});
+    if (r.status === 'confirmed') {
+      actions.appendChild(el('button', {class:'btn btn-ghost', style:'padding:3px 8px;font-size:11px', on:{click:function(){openResModal(r);}}}, ['Editar']));
+      actions.appendChild(el('button', {class:'btn btn-primary', style:'padding:3px 8px;font-size:11px;background:var(--success)', on:{click:function(){doCheckinFromRes(r);}}}, ['▶ Check-in']));
+      actions.appendChild(el('button', {class:'btn btn-ghost', style:'padding:3px 8px;font-size:11px;color:var(--danger)', on:{click:function(){cancelReservation(r);}}}, ['Cancelar']));
+    }
+    var tr = el('tr', {}, [
+      el('td', {}, [ el('strong', {text: r.guestName||'—'}), el('br'), el('small', {style:'color:var(--text-dim)', text: r.guestCpf||''}) ]),
+      el('td', {text: 'Q'+r.roomNumber+' · '+(r.roomType||'')}),
+      el('td', {text: fmtBR(r.checkinDate)}),
+      el('td', {text: fmtBR(r.checkoutDate)}),
+      el('td', {text: String(r.numberOfNights||0)}),
+      el('td', {text: r.totalValue ? 'R$ '+r.totalValue.toFixed(2) : '—'}),
+      el('td', {}, [ el('span', {class: chipCls, text: statusLabel}) ]),
+      actions,
+    ]);
+    tbody.appendChild(tr);
+  });
+  t.appendChild(tbody);
+  wrap.appendChild(t);
+  c.appendChild(wrap);
+}
+
+function openResModal(res) {
+  resState.editing = res || null;
+  $('resModalTitle').textContent = res ? 'Editar Reserva' : 'Nova Reserva';
+  $('resCpf').value        = res ? (res.guestCpf||'') : '';
+  $('resGuestName').value  = res ? (res.guestName||'') : '';
+  var today    = new Date().toISOString().split('T')[0];
+  var tomorrow = new Date(Date.now()+86400000).toISOString().split('T')[0];
+  $('resCheckin').value    = res ? (res.checkinDate||today)    : today;
+  $('resCheckout').value   = res ? (res.checkoutDate||tomorrow): tomorrow;
+  $('resRequests').value   = res ? (res.specialRequests||'')   : '';
+  $('resRoomId').value     = res ? (res.roomId||'') : '';
+  clear($('resRoomGrid'));
+  $('resPriceSummary').style.display = 'none';
+  $('resModal').classList.add('active');
+  loadResAvailability();
+}
+
+async function loadResAvailability() {
+  var checkin  = $('resCheckin').value;
+  var checkout = $('resCheckout').value;
+  var grid     = $('resRoomGrid');
+  clear(grid);
+  if (!checkin || !checkout || checkout <= checkin) {
+    grid.appendChild(el('p', {style:'color:var(--text-dim);font-size:12px;padding:8px 0', text:'Selecione datas válidas'}));
+    return;
+  }
+  grid.appendChild(el('p', {style:'color:var(--text-dim);font-size:12px;padding:8px 0', text:'Verificando...'}));
+  try {
+    var exclude = resState.editing ? '&exclude='+resState.editing.id : '';
+    var rooms = await api('/api/hotels/'+state.hotelId+'/rooms/availability?checkin='+checkin+'&checkout='+checkout+exclude);
+    clear(grid);
+    if (!rooms.length) { grid.appendChild(el('p', {style:'color:var(--text-dim);font-size:12px', text:'Nenhum quarto cadastrado'})); return; }
+    var selectedId = $('resRoomId').value;
+    rooms.forEach(function(r) {
+      var cls = 'avail-card '+(r.available ? 'avail-ok' : 'avail-no')+(r.id===selectedId ? ' selected' : '');
+      var card = el('div', {class:cls}, [
+        el('strong', {text:'Q'+r.roomNumber}),
+        el('small', {text:r.roomType+' · R$'+r.dailyRate.toFixed(2)+'/nt'}),
+        el('small', {text: r.available ? '✓ Disponível' : '✗ Ocupado', style:'color:'+(r.available?'var(--success)':'var(--danger)')})
+      ]);
+      if (r.available) {
+        card.addEventListener('click', function() {
+          $('resRoomId').value = r.id;
+          grid.querySelectorAll('.avail-card').forEach(function(c){ c.classList.remove('selected'); });
+          card.classList.add('selected');
+          updateResPriceSummary(r.dailyRate, checkin, checkout);
+        });
+        if (r.id === selectedId) updateResPriceSummary(r.dailyRate, checkin, checkout);
+      }
+      grid.appendChild(card);
+    });
+  } catch(e) { clear(grid); grid.appendChild(el('p', {style:'color:var(--danger);font-size:12px', text:'Erro: '+e.message})); }
+}
+
+function updateResPriceSummary(dailyRate, checkin, checkout) {
+  var nights = Math.round((new Date(checkout+'T12:00:00') - new Date(checkin+'T12:00:00')) / 86400000);
+  var total  = dailyRate * nights;
+  var s = $('resPriceSummary');
+  s.style.display = 'block';
+  s.innerHTML = '<span style="color:var(--text-muted)">'+nights+' noite'+(nights>1?'s':'')+' × R$ '+dailyRate.toFixed(2)+'</span>'
+    +'&nbsp;&nbsp;<strong style="color:var(--success);font-size:15px">= R$ '+total.toFixed(2)+'</strong>';
+}
+
+async function saveReservation() {
+  var cpf      = $('resCpf').value.replace(/\D/g,'');
+  var name     = $('resGuestName').value.trim();
+  var checkin  = $('resCheckin').value;
+  var checkout = $('resCheckout').value;
+  var roomId   = $('resRoomId').value;
+  var requests = $('resRequests').value.trim();
+
+  if (!resState.editing) {
+    if (!validateCPF(cpf)) return toast('CPF inválido', 'error');
+    if (name.length < 3)   return toast('Informe o nome completo', 'error');
+  }
+  if (!checkin || !checkout || checkout <= checkin) return toast('Datas inválidas', 'error');
+  if (!roomId) return toast('Selecione um quarto disponível', 'error');
+
+  var btn = $('resModalSave');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    if (resState.editing) {
+      await api('/api/hotels/'+state.hotelId+'/reservations/'+resState.editing.id, {
+        method:'PUT', body:JSON.stringify({ roomId:roomId, checkinDate:checkin, checkoutDate:checkout, specialRequests:requests||null })
+      });
+      toast('Reserva atualizada', 'success');
+    } else {
+      // Cria ou busca hóspede
+      var guest = await api('/api/hotels/'+state.hotelId+'/guests', { method:'POST', body:JSON.stringify({ cpf:cpf, name:name }) });
+      await api('/api/hotels/'+state.hotelId+'/reservations', {
+        method:'POST', body:JSON.stringify({
+          guestId:guest.id, roomId:roomId,
+          checkinDate:checkin, checkoutDate:checkout,
+          specialRequests:requests||null, numberOfGuests:1
+        })
+      });
+      toast('Reserva criada com sucesso!', 'success');
+    }
+    $('resModal').classList.remove('active');
+    loadReservations();
+  } catch(e) { toast('Erro: '+e.message, 'error'); }
+  finally { btn.disabled=false; btn.textContent='Reservar'; }
+}
+
+async function cancelReservation(r) {
+  if (!confirm('Cancelar a reserva de '+r.guestName+'?')) return;
+  try {
+    await api('/api/hotels/'+state.hotelId+'/reservations/'+r.id, {method:'DELETE'});
+    toast('Reserva cancelada', 'success');
+    loadReservations();
+  } catch(e) { toast('Erro: '+e.message, 'error'); }
+}
+
+async function doCheckinFromRes(r) {
+  if (!confirm('Fazer check-in de '+r.guestName+' no quarto '+r.roomNumber+'?')) return;
+  try {
+    await api('/api/reservations/'+r.id+'/checkin', {method:'POST'});
+    toast('Check-in realizado! Quarto '+r.roomNumber, 'success');
+    loadReservations();
+    loadRooms();
+    loadDashboard();
+  } catch(e) { toast('Erro: '+e.message, 'error'); }
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -1551,8 +1812,19 @@ document.addEventListener('DOMContentLoaded', function() {
     btn.addEventListener('click', function() { setTimeout(loadReport, 50); });
   });
 
+  // Reservas
+  $('newResBtn').addEventListener('click', function(){ openResModal(null); });
+  $('resModalClose').addEventListener('click', function(){ $('resModal').classList.remove('active'); });
+  $('resModalCancel').addEventListener('click', function(){ $('resModal').classList.remove('active'); });
+  $('resModalSave').addEventListener('click', saveReservation);
+  $('resFilterBtn').addEventListener('click', loadReservations);
+  $('resStatusFilter').addEventListener('change', loadReservations);
+  $('resCpf').addEventListener('input', function(e){ e.target.value = maskCPF(e.target.value); });
+  $('resCheckin').addEventListener('change', loadResAvailability);
+  $('resCheckout').addEventListener('change', loadResAvailability);
+
   // Fechar modais clicando no overlay
-  ['staffModal','taskModal','inspectModal','seasonModal','fnrhModal'].forEach(function(id) {
+  ['staffModal','taskModal','inspectModal','seasonModal','fnrhModal','resModal'].forEach(function(id) {
     $(id).addEventListener('click', function(e) { if (e.target.id === id) $(id).classList.remove('active'); });
   });
 

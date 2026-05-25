@@ -92,6 +92,16 @@ const FROM_DB = {
     priceMultiplier: toFloat(r.pricemultiplier) ?? 1,
     createdAt: toISOStr(r.createdat),
   },
+  reservations: (r) => !r ? null : {
+    id: r.id, hotelId: r.hotelid, guestId: r.guestid, roomId: r.roomid,
+    checkinDate: toDateStr(r.checkindate), checkoutDate: toDateStr(r.checkoutdate),
+    numberOfNights: r.numberofnights, numberOfGuests: r.numberofguests,
+    channel: r.channel, source: r.source, status: r.status,
+    dailyRate: toFloat(r.dailyrate), totalValue: toFloat(r.totalvalue),
+    depositPaid: toFloat(r.depositpaid) ?? 0,
+    specialRequests: r.specialrequests,
+    createdAt: toISOStr(r.createdat), updatedAt: toISOStr(r.updatedat),
+  },
 };
 
 // ─── buildDbObj: objeto JS (camelCase) → row Postgres (lowercase) ───────────

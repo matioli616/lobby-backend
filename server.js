@@ -316,6 +316,30 @@ function isCalendarDate(str) {
   return year >= 2000 && year <= 2100;
 }
 
+function diffDays(from, to) {
+  return Math.round((new Date(to + 'T12:00:00') - new Date(from + 'T12:00:00')) / 86400000);
+}
+
+async function isRoomAvailable(hotelId, roomId, checkinDate, checkoutDate, excludeResId) {
+  const [conflict] = await db.q(
+    `SELECT 1 FROM reservations
+     WHERE hotelid = $1 AND roomid = $2 AND status = 'confirmed'
+     AND checkindate < $4::date AND checkoutdate > $3::date
+     AND ($5 IS NULL OR id::text != $5)
+     LIMIT 1`,
+    [hotelId, roomId, checkinDate, checkoutDate, excludeResId || null]
+  );
+  if (conflict) return false;
+  const [busyStay] = await db.q(
+    `SELECT 1 FROM stays
+     WHERE roomid = $1 AND checkouttime IS NULL
+     AND (checkintime::date + numberofnights * INTERVAL '1 day')::date > $2::date
+     LIMIT 1`,
+    [roomId, checkinDate]
+  );
+  return !busyStay;
+}
+
 const SeasonSchemaBase = z.object({
   name:            z.string().min(2).max(100),
   type:            z.enum(['low','regular','high','peak']),
@@ -332,6 +356,16 @@ const WeekdaySchema = z.object({
   '2': z.number().min(0.5).max(3.0), '3': z.number().min(0.5).max(3.0),
   '4': z.number().min(0.5).max(3.0), '5': z.number().min(0.5).max(3.0),
   '6': z.number().min(0.5).max(3.0),
+});
+const ReservationSchema = z.object({
+  guestId:         z.string().uuid(),
+  roomId:          z.string().uuid(),
+  checkinDate:     z.string().refine(isCalendarDate, 'checkinDate inválida (use YYYY-MM-DD)'),
+  checkoutDate:    z.string().refine(isCalendarDate, 'checkoutDate inválida (use YYYY-MM-DD)'),
+  numberOfGuests:  z.number().min(1).max(20).default(1),
+  specialRequests: z.string().max(500).optional().nullable(),
+}).refine(d => d.checkoutDate > d.checkinDate, {
+  message: 'checkoutDate deve ser após checkinDate', path: ['checkoutDate'],
 });
 
 const FNRHObjectBase = z.object({
@@ -605,6 +639,185 @@ app.put('/api/stays/:stayId/checkout', verifyToken, async (req, res) => {
     res.json({ success: true, total });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao fazer checkout', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// ============ ROUTES: RESERVAS ============
+
+// Disponibilidade de quartos para um período
+app.get('/api/hotels/:hotelId/rooms/availability', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const { checkin, checkout, exclude } = req.query;
+    if (!checkin || !checkout || !isCalendarDate(checkin) || !isCalendarDate(checkout) || checkout <= checkin)
+      return res.status(400).json({ error: 'Parâmetros inválidos: checkin e checkout obrigatórios (YYYY-MM-DD) e checkout deve ser após checkin', code: 'INVALID_PARAMS' });
+    const rows = await db.q(
+      `SELECT r.id, r.roomnumber, r.roomtype, r.capacity, r.dailyrate, r.status,
+         CASE WHEN
+           EXISTS (
+             SELECT 1 FROM reservations res
+             WHERE res.roomid = r.id AND res.status = 'confirmed'
+             AND res.checkindate < $2::date AND res.checkoutdate > $1::date
+             AND ($3 IS NULL OR res.id::text != $3)
+           ) OR EXISTS (
+             SELECT 1 FROM stays s
+             WHERE s.roomid = r.id AND s.checkouttime IS NULL
+             AND (s.checkintime::date + s.numberofnights * INTERVAL '1 day')::date > $1::date
+           )
+         THEN false ELSE true END AS available
+       FROM rooms r WHERE r.hotelid = $4 ORDER BY r.roomnumber`,
+      [checkin, checkout, exclude || null, hotelId]
+    );
+    res.json(rows.map(r => ({
+      id: r.id, roomNumber: r.roomnumber?.toString(), roomType: r.roomtype,
+      capacity: r.capacity, dailyRate: parseFloat(r.dailyrate),
+      status: r.status, available: r.available,
+    })));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao verificar disponibilidade', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Listar reservas
+app.get('/api/hotels/:hotelId/reservations', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const { status, from, to } = req.query;
+    let sql = `SELECT r.*, g.name AS guest_name, g.cpf AS guest_cpf,
+                 rm.roomnumber, rm.roomtype
+               FROM reservations r
+               LEFT JOIN guests g  ON g.id  = r.guestid
+               LEFT JOIN rooms  rm ON rm.id = r.roomid
+               WHERE r.hotelid = $1`;
+    const params = [hotelId];
+    if (status) { params.push(status); sql += ` AND r.status = $${params.length}`; }
+    if (from)   { params.push(from);   sql += ` AND r.checkoutdate >= $${params.length}::date`; }
+    if (to)     { params.push(to);     sql += ` AND r.checkindate  <= $${params.length}::date`; }
+    sql += ' ORDER BY r.checkindate ASC, r.createdat DESC';
+    const rows = await db.q(sql, params);
+    res.json(rows.map(r => ({
+      ...db.FROM_DB.reservations(r),
+      guestName: r.guest_name,
+      guestCpf:  r.guest_cpf,
+      roomNumber: r.roomnumber?.toString(),
+      roomType:   r.roomtype,
+    })));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao listar reservas', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Criar reserva
+app.post('/api/hotels/:hotelId/reservations', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const body = ReservationSchema.parse(req.body);
+    const { guestId, roomId, checkinDate, checkoutDate, numberOfGuests, specialRequests } = body;
+
+    const [guest, room] = await Promise.all([db.getById('guests', guestId), db.getById('rooms', roomId)]);
+    if (!guest || guest.hotelId !== hotelId) return res.status(404).json({ error: 'Hóspede não encontrado', code: 'NOT_FOUND' });
+    if (!room  || room.hotelId  !== hotelId) return res.status(404).json({ error: 'Quarto não encontrado', code: 'NOT_FOUND' });
+
+    const available = await isRoomAvailable(hotelId, roomId, checkinDate, checkoutDate, null);
+    if (!available) return res.status(409).json({ error: 'Quarto não disponível para o período solicitado', code: 'ROOM_NOT_AVAILABLE' });
+
+    const numberOfNights = diffDays(checkinDate, checkoutDate);
+    const totalValue     = room.dailyRate * numberOfNights;
+    const newRes = await db.insert('reservations', {
+      id: randomUUID(), hotelId, guestId, roomId,
+      checkinDate, checkoutDate, numberOfNights, numberOfGuests,
+      dailyRate: room.dailyRate, totalValue,
+      specialRequests: specialRequests || null,
+      status: 'confirmed', channel: 'direct', source: 'front-desk',
+    });
+    res.status(201).json(newRes);
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: 'Dados inválidos', details: err.errors, code: 'VALIDATION_ERROR' });
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao criar reserva', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Editar reserva
+app.put('/api/hotels/:hotelId/reservations/:resId', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId, resId } = req.params;
+    const reservation = await db.getById('reservations', resId);
+    if (!reservation || reservation.hotelId !== hotelId) return res.status(404).json({ error: 'Reserva não encontrada', code: 'NOT_FOUND' });
+    if (reservation.status !== 'confirmed') return res.status(409).json({ error: 'Só é possível editar reservas confirmadas', code: 'INVALID_STATUS' });
+
+    const { roomId, checkinDate, checkoutDate, numberOfGuests, specialRequests } = req.body;
+    const newRoomId  = roomId      || reservation.roomId;
+    const newCheckin = checkinDate || reservation.checkinDate;
+    const newCheckout= checkoutDate|| reservation.checkoutDate;
+    if (newCheckout <= newCheckin) return res.status(400).json({ error: 'checkoutDate deve ser após checkinDate', code: 'INVALID_DATES' });
+
+    const datesOrRoomChanged = newRoomId !== reservation.roomId || newCheckin !== reservation.checkinDate || newCheckout !== reservation.checkoutDate;
+    if (datesOrRoomChanged) {
+      const available = await isRoomAvailable(hotelId, newRoomId, newCheckin, newCheckout, resId);
+      if (!available) return res.status(409).json({ error: 'Quarto não disponível para o período', code: 'ROOM_NOT_AVAILABLE' });
+    }
+
+    const newRoom       = newRoomId !== reservation.roomId ? await db.getById('rooms', newRoomId) : null;
+    const dailyRate     = newRoom ? newRoom.dailyRate : reservation.dailyRate;
+    const numberOfNights= diffDays(newCheckin, newCheckout);
+    const updated = await db.update('reservations', resId, {
+      roomId: newRoomId, checkinDate: newCheckin, checkoutDate: newCheckout,
+      numberOfNights, numberOfGuests: numberOfGuests ?? reservation.numberOfGuests,
+      dailyRate, totalValue: dailyRate * numberOfNights,
+      specialRequests: specialRequests !== undefined ? specialRequests : reservation.specialRequests,
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao editar reserva', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Cancelar reserva (soft delete)
+app.delete('/api/hotels/:hotelId/reservations/:resId', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId, resId } = req.params;
+    const reservation = await db.getById('reservations', resId);
+    if (!reservation || reservation.hotelId !== hotelId) return res.status(404).json({ error: 'Reserva não encontrada', code: 'NOT_FOUND' });
+    if (reservation.status === 'checked_in') return res.status(409).json({ error: 'Não é possível cancelar após check-in', code: 'INVALID_STATUS' });
+    if (reservation.status === 'cancelled')  return res.status(409).json({ error: 'Reserva já cancelada', code: 'ALREADY_CANCELLED' });
+    await db.update('reservations', resId, { status: 'cancelled' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao cancelar reserva', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Check-in a partir de reserva
+app.post('/api/reservations/:resId/checkin', verifyToken, async (req, res) => {
+  try {
+    const { resId } = req.params;
+    const reservation = await db.getById('reservations', resId);
+    if (!reservation) return res.status(404).json({ error: 'Reserva não encontrada', code: 'NOT_FOUND' });
+    if (reservation.hotelId !== req.user.hotelId) return res.status(403).json({ error: 'Acesso negado', code: 'FORBIDDEN' });
+    if (reservation.status !== 'confirmed') return res.status(409).json({ error: 'Reserva não está confirmada', code: 'INVALID_STATUS' });
+    const room = await db.getById('rooms', reservation.roomId);
+    if (!room || room.status !== 'available') return res.status(409).json({ error: 'Quarto não está disponível', code: 'ROOM_NOT_AVAILABLE' });
+
+    const [stay] = await Promise.all([
+      db.insert('stays', {
+        id: randomUUID(), hotelId: reservation.hotelId,
+        guestId: reservation.guestId, roomId: reservation.roomId,
+        numberOfNights: reservation.numberOfNights, dailyRate: reservation.dailyRate,
+        checkinTime: new Date().toISOString(), extras: 0,
+        reservationId: resId,
+      }),
+      db.update('rooms', reservation.roomId, { status: 'occupied' }),
+      db.update('reservations', resId, { status: 'checked_in' }),
+    ]);
+    res.status(201).json({ success: true, stayId: stay.id });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao realizar check-in da reserva', code: 'INTERNAL_ERROR' });
   }
 });
 
