@@ -155,3 +155,18 @@ SELECT
   COUNT(*) FILTER (WHERE s."checkoutTime" IS NULL) AS active_stays
 FROM stays s
 GROUP BY s."hotelId", DATE(s."checkinTime");
+
+-- ============================================================
+-- SEGURANÇA: RLS + exec_sql (aplicado 2026-05-28)
+-- ============================================================
+
+-- Habilita RLS nas tabelas que estavam abertas.
+-- Sem políticas = deny-all via PostgREST. Backend usa service_role (bypassa RLS).
+ALTER TABLE public.cleaning_staff       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cleaning_tasks       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cleaning_inspections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fnrh_records         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.seasons              ENABLE ROW LEVEL SECURITY;
+
+-- Revoga exec_sql de PUBLIC (anon/authenticated não devem chamar SQL arbitrário via RPC).
+REVOKE EXECUTE ON FUNCTION public.exec_sql(text, jsonb) FROM PUBLIC;
