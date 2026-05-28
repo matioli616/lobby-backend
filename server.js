@@ -11,6 +11,67 @@ const { randomUUID } = require('crypto');
 const db = require('./db');
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
+
+// ============ NFS-e (Focus NFe) ============
+const FOCUSNFE_TOKEN = process.env.FOCUSNFE_TOKEN || '';
+const FOCUSNFE_BASE  = process.env.FOCUSNFE_ENV === 'production'
+  ? 'https://api.focusnfe.com.br'
+  : 'https://homologacao.focusnfe.com.br';
+
+async function emitirNfse(invoiceId, stay, guest, roomNumber) {
+  if (!FOCUSNFE_TOKEN) return;
+  const ref  = `lobby-${invoiceId}`;
+  const auth = Buffer.from(`${FOCUSNFE_TOKEN}:`).toString('base64');
+  const total = stay.numberOfNights * stay.dailyRate + (stay.extras || 0);
+  const body = {
+    data_emissao: new Date().toISOString().split('T')[0],
+    prestador: {
+      cnpj:                  (process.env.HOTEL_CNPJ || '18765432000100').replace(/\D/g, ''),
+      inscricao_municipal:   process.env.HOTEL_INSCRICAO_MUNICIPAL || '12345',
+      codigo_municipio:      process.env.HOTEL_MUNICIPIO_CODIGO    || '3550308',
+    },
+    tomador: {
+      cpf:          (guest.cpf || '').replace(/\D/g, '') || undefined,
+      razao_social: guest.name,
+      email:        guest.email || undefined,
+    },
+    items: [{
+      discriminacao: `Hospedagem ${stay.numberOfNights} noite(s) - Quarto ${roomNumber}`,
+      cnae:          process.env.HOTEL_CNAE || '5590601',
+      valor_unitario: total,
+      quantidade:    1,
+    }],
+  };
+  try {
+    const resp = await fetch(`${FOCUSNFE_BASE}/v2/nfse?ref=${ref}`, {
+      method:  'POST',
+      headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+    const data = await resp.json();
+    await db.update('invoices', invoiceId, {
+      nfseId:     ref,
+      nfseStatus: data.status || 'processando',
+      nfseNumero: data.numero    || null,
+      nfseUrl:    data.url       || null,
+    });
+  } catch (err) {
+    console.error('[NFS-e] Erro ao emitir:', err.message);
+    await db.update('invoices', invoiceId, { nfseId: ref, nfseStatus: 'erro' }).catch(() => {});
+  }
+}
+
+async function consultarNfse(nfseId) {
+  if (!FOCUSNFE_TOKEN || !nfseId) return null;
+  const auth = Buffer.from(`${FOCUSNFE_TOKEN}:`).toString('base64');
+  try {
+    const resp = await fetch(`${FOCUSNFE_BASE}/v2/nfse/${nfseId}`, {
+      headers: { Authorization: `Basic ${auth}` },
+    });
+    return await resp.json();
+  } catch { return null; }
+}
+
 const JWT_SECRET = process.env.JWT_SECRET || (
   NODE_ENV === 'production'
     ? (() => { throw new Error('JWT_SECRET não definido — obrigatório em produção'); })()
@@ -624,21 +685,58 @@ app.put('/api/stays/:stayId/checkout', verifyToken, async (req, res) => {
     if (stay.checkoutTime)
       return res.status(409).json({ error: 'Checkout já realizado', code: 'ALREADY_CHECKED_OUT' });
 
-    const now   = new Date().toISOString();
-    const total = (stay.numberOfNights * stay.dailyRate) + (stay.extras || 0);
+    const now       = new Date().toISOString();
+    const total     = (stay.numberOfNights * stay.dailyRate) + (stay.extras || 0);
+    const invoiceId = randomUUID();
 
     await Promise.all([
       db.update('stays', stayId, { checkoutTime: now, paymentMethod }),
       db.insert('invoices', {
-        id: randomUUID(), hotelId: stay.hotelId, stayId,
+        id: invoiceId, hotelId: stay.hotelId, stayId,
         total, paymentMethod, status: paymentStatus || 'paid',
+        nfseStatus: FOCUSNFE_TOKEN ? 'processando' : null,
         createdAt: now,
       }),
       db.update('rooms', stay.roomId, { status: 'available' }),
     ]);
-    res.json({ success: true, total });
+
+    // Dispara emissão NFS-e sem bloquear a resposta
+    if (FOCUSNFE_TOKEN) {
+      Promise.all([
+        db.getById('guests', stay.guestId),
+        db.q('SELECT roomnumber FROM rooms WHERE id = $1', [stay.roomId]),
+      ]).then(([guest, [room]]) => {
+        if (guest && room) emitirNfse(invoiceId, stay, guest, room.roomnumber);
+      }).catch(() => {});
+    }
+
+    res.json({ success: true, total, invoiceId, nfseEnabled: !!FOCUSNFE_TOKEN });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao fazer checkout', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Consulta invoice + status NFS-e (atualiza se ainda processando)
+app.get('/api/hotels/:hotelId/invoices/:invoiceId', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const invoice = await db.getById('invoices', req.params.invoiceId);
+    if (!invoice || invoice.hotelId !== req.params.hotelId)
+      return res.status(404).json({ error: 'Invoice não encontrada', code: 'NOT_FOUND' });
+
+    if (invoice.nfseStatus === 'processando' && invoice.nfseId) {
+      const data = await consultarNfse(invoice.nfseId);
+      if (data && data.status && data.status !== invoice.nfseStatus) {
+        const updated = await db.update('invoices', invoice.id, {
+          nfseStatus: data.status,
+          nfseNumero: data.numero || invoice.nfseNumero,
+          nfseUrl:    data.url    || invoice.nfseUrl,
+        });
+        return res.json(updated);
+      }
+    }
+    res.json(invoice);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao consultar invoice', code: 'INTERNAL_ERROR' });
   }
 });
 

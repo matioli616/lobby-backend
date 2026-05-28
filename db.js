@@ -47,6 +47,8 @@ const FROM_DB = {
   invoices: (r) => !r ? null : {
     id: r.id, hotelId: r.hotelid, stayId: r.stayid,
     total: toFloat(r.totalvalue), paymentMethod: r.paymentmethod, status: r.status,
+    nfseId: r.nfse_id ?? null, nfseNumero: r.nfse_numero ?? null,
+    nfseUrl: r.nfse_url ?? null, nfseStatus: r.nfse_status ?? null,
     createdAt: toISOStr(r.createdat), updatedAt: toISOStr(r.updatedat),
   },
   hotels: (r) => !r ? null : {
@@ -108,7 +110,7 @@ const FROM_DB = {
 // Casos especiais onde camelCase.toLowerCase() ≠ nome da coluna
 const KEY_OVERRIDES = {
   users:    { password: 'password_hash' },
-  invoices: { total: 'totalvalue' },
+  invoices: { total: 'totalvalue', nfseId: 'nfse_id', nfseNumero: 'nfse_numero', nfseUrl: 'nfse_url', nfseStatus: 'nfse_status' },
 };
 
 function buildDbObj(table, obj) {

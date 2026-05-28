@@ -291,6 +291,12 @@ input, select { font-family: inherit; }
           </select>
         </div>
         <button class="btn btn-primary btn-block" id="checkoutBtn">Finalizar check-out</button>
+        <div id="nfseResult" style="display:none;margin-top:16px;padding:14px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0">
+          <div style="font-weight:600;margin-bottom:6px">Nota Fiscal de Serviço</div>
+          <div id="nfseStatus" style="font-size:13px;color:#166534"></div>
+          <a id="nfseLink" href="#" target="_blank" style="display:none;margin-top:8px;font-size:13px;color:#2563eb;text-decoration:underline">Ver Nota Fiscal (PDF)</a>
+          <button id="nfseRefreshBtn" style="display:none;margin-top:8px;font-size:12px;background:none;border:1px solid #6b7280;border-radius:4px;padding:4px 10px;cursor:pointer">Atualizar status</button>
+        </div>
       </div>
     </section>
     <!-- RESERVAS -->
@@ -600,7 +606,7 @@ input, select { font-family: inherit; }
 <script>
 'use strict';
 const API_URL = '';
-const state = { user: null, hotelId: null, token: null, rooms: [], guests: [], currentStay: null };
+const state = { user: null, hotelId: null, token: null, rooms: [], guests: [], currentStay: null, lastInvoiceId: null };
 var resState = { list: [], editing: null };
 
 function $(id) { return document.getElementById(id); }
@@ -850,9 +856,15 @@ async function performCheckout() {
   const btn = $('checkoutBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Processando...';
+  $('nfseResult').style.display = 'none';
   try {
-    await api('/api/stays/' + state.currentStay.id + '/checkout', { method: 'PUT', body: JSON.stringify({ paymentMethod: $('paymentMethod').value, paymentStatus: 'paid' }) });
+    const result = await api('/api/stays/' + state.currentStay.id + '/checkout', { method: 'PUT', body: JSON.stringify({ paymentMethod: $('paymentMethod').value, paymentStatus: 'paid' }) });
     toast('Check-out realizado com sucesso', 'success');
+    if (result.nfseEnabled && result.invoiceId) {
+      state.lastInvoiceId = result.invoiceId;
+      showNfseStatus('processando', null);
+      setTimeout(() => refreshNfseStatus(result.invoiceId), 4000);
+    }
     $('checkoutRoom').value = '';
     $('stayInfo').style.display = 'none';
     state.currentStay = null;
@@ -860,6 +872,32 @@ async function performCheckout() {
     await loadDashboard();
   } catch (err) { toast('Erro: ' + err.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = 'Finalizar check-out'; }
+}
+
+function showNfseStatus(status, url) {
+  const box    = $('nfseResult');
+  const label  = $('nfseStatus');
+  const link   = $('nfseLink');
+  const refBtn = $('nfseRefreshBtn');
+  const msgs   = { processando: 'Aguardando emissão pela prefeitura...', autorizado: 'Nota emitida com sucesso!', erro: 'Erro na emissão — contate o suporte.' };
+  label.textContent = msgs[status] || status;
+  box.style.display = 'block';
+  box.style.background = status === 'erro' ? '#fef2f2' : '#f0fdf4';
+  box.style.borderColor = status === 'erro' ? '#fecaca' : '#bbf7d0';
+  label.style.color     = status === 'erro' ? '#991b1b' : '#166534';
+  link.style.display    = (status === 'autorizado' && url) ? 'block' : 'none';
+  if (url) link.href    = url;
+  refBtn.style.display  = status === 'processando' ? 'inline-block' : 'none';
+}
+
+async function refreshNfseStatus(invoiceId) {
+  try {
+    const inv = await api('/api/hotels/' + state.hotelId + '/invoices/' + invoiceId);
+    showNfseStatus(inv.nfseStatus || 'processando', inv.nfseUrl);
+    if (inv.nfseStatus === 'processando') {
+      $('nfseRefreshBtn').style.display = 'inline-block';
+    }
+  } catch { /* silently ignore */ }
 }
 
 async function loadGuests() {
@@ -1761,6 +1799,7 @@ document.addEventListener('DOMContentLoaded', function() {
   $('checkinBtn').addEventListener('click', performCheckin);
   $('checkoutBtn').addEventListener('click', performCheckout);
   $('checkoutRoom').addEventListener('change', function(e) { loadActiveStay(e.target.value); });
+  $('nfseRefreshBtn').addEventListener('click', function() { if (state.lastInvoiceId) refreshNfseStatus(state.lastInvoiceId); });
   $('guestSearch').addEventListener('input', function(e) {
     const q = e.target.value.toLowerCase();
     renderGuests(state.guests.filter(function(g) { return g.name.toLowerCase().includes(q) || (g.cpf || '').includes(q); }));

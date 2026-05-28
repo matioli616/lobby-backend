@@ -170,3 +170,20 @@ ALTER TABLE public.seasons              ENABLE ROW LEVEL SECURITY;
 
 -- Revoga exec_sql de PUBLIC (anon/authenticated não devem chamar SQL arbitrário via RPC).
 REVOKE EXECUTE ON FUNCTION public.exec_sql(text, jsonb) FROM PUBLIC;
+
+-- ============================================================
+-- NFS-e — colunas adicionadas na tabela invoices (2026-05-28)
+-- ============================================================
+ALTER TABLE invoices
+  ADD COLUMN IF NOT EXISTS nfse_id     TEXT,
+  ADD COLUMN IF NOT EXISTS nfse_numero TEXT,
+  ADD COLUMN IF NOT EXISTS nfse_url    TEXT,
+  ADD COLUMN IF NOT EXISTS nfse_status TEXT;
+
+-- Variáveis de ambiente necessárias no servidor:
+--   FOCUSNFE_TOKEN            — token da API Focus NFe (sandbox: cadastro em focusnfe.com.br)
+--   FOCUSNFE_ENV              — 'sandbox' (padrão) ou 'production'
+--   HOTEL_CNPJ                — CNPJ do hotel (apenas dígitos)
+--   HOTEL_INSCRICAO_MUNICIPAL — inscrição municipal do hotel
+--   HOTEL_MUNICIPIO_CODIGO    — código IBGE do município (padrão: 3550308 = São Paulo)
+--   HOTEL_CNAE                — CNAE do serviço (padrão: 5590601 = hospedagem)
