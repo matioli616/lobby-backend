@@ -6,7 +6,6 @@ const bcrypt = require('bcrypt');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
-const cors = require('cors');
 const { randomUUID } = require('crypto');
 const db = require('./db');
 
@@ -88,8 +87,8 @@ app.use(helmet({
       defaultSrc:  ["'self'"],
       scriptSrc:   ["'self'", "'unsafe-inline'"],
       styleSrc:    ["'self'", "'unsafe-inline'"],
-      imgSrc:      ["'self'", 'data:', 'https://lobby-backend-tp84.onrender.com'],
-      connectSrc:  ["'self'", 'https://lobby-backend-tp84.onrender.com'],
+      imgSrc:      ["'self'", 'data:'],
+      connectSrc:  ["'self'"],
       fontSrc:     ["'self'"],
       objectSrc:   ["'none'"],
       frameSrc:    ["'none'"],
@@ -103,13 +102,19 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,h
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+  // Sem origin = mesma origem ou server-to-server: não precisa de headers CORS
+  if (!origin) {
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    return next();
+  }
   const serverOrigin = `${req.protocol}://${req.get('host')}`;
-  const allowed = !origin || origin === serverOrigin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*');
+  const allowed = origin === serverOrigin || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*');
   if (allowed) {
-    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    res.setHeader('Vary', 'Origin');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     return next();
   }
@@ -297,8 +302,13 @@ async function seedDatabase() {
 }
 
 // ============ HEALTH CHECK ============
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', mode: 'supabase', timestamp: new Date().toISOString() });
+app.get('/health', async (req, res) => {
+  try {
+    await db.q('SELECT 1 AS ok', []);
+    res.json({ status: 'ok', mode: 'supabase', db: 'connected', timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(503).json({ status: 'degraded', mode: 'supabase', db: 'error', timestamp: new Date().toISOString() });
+  }
 });
 
 // ============ FUNÇÕES UTILITÁRIAS ============
@@ -367,6 +377,11 @@ const InspectTaskSchema = z.object({
 const StaffLoginSchema = z.object({
   staffId: z.string().uuid(),
   pin:     z.string().regex(/^\d{4,6}$/),
+});
+const PaymentMethodEnum = z.enum(['cash','credit','debit','pix']);
+const CheckoutBodySchema = z.object({
+  paymentMethod: PaymentMethodEnum,
+  paymentStatus: z.enum(['paid','pending']).optional().default('paid'),
 });
 
 function isCalendarDate(str) {
@@ -515,6 +530,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     const user  = db.FROM_DB.users(row ?? null);
     const valid = user && await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ error: 'Email ou senha inválidos', code: 'INVALID_CREDENTIALS' });
+    if (!user.isActive) return res.status(403).json({ error: 'Conta desativada', code: 'INACTIVE_ACCOUNT' });
     const token = jwt.sign({ id: user.id, email: user.email, hotelId: user.hotelId }, JWT_SECRET, { expiresIn: '8h' });
     const { password: _, ...safeUser } = user;
     res.cookie('lobby_token', token, {
@@ -538,6 +554,7 @@ app.post('/api/auth/refresh', async (req, res) => {
     const decoded = jwt.verify(cookieToken, JWT_SECRET);
     const user    = await db.getById('users', decoded.id);
     if (!user) return res.status(401).json({ error: 'Usuário não encontrado', code: 'USER_NOT_FOUND' });
+    if (!user.isActive) return res.status(403).json({ error: 'Conta desativada', code: 'INACTIVE_ACCOUNT' });
     const newToken = jwt.sign({ id: user.id, email: user.email, hotelId: user.hotelId }, JWT_SECRET, { expiresIn: '8h' });
     const { password: _, ...safeUser } = user;
     res.cookie('lobby_token', newToken, {
@@ -677,7 +694,7 @@ app.get('/api/hotels/:hotelId/stays/active/room/:roomId', verifyToken, enforceHo
 app.put('/api/stays/:stayId/checkout', verifyToken, async (req, res) => {
   try {
     const { stayId } = req.params;
-    const { paymentMethod, paymentStatus } = req.body;
+    const { paymentMethod, paymentStatus } = CheckoutBodySchema.parse(req.body);
     const stay = await db.getById('stays', stayId);
     if (!stay) return res.status(404).json({ error: 'Hospedagem não encontrada', code: 'NOT_FOUND' });
     if (stay.hotelId !== req.user.hotelId)
@@ -689,11 +706,22 @@ app.put('/api/stays/:stayId/checkout', verifyToken, async (req, res) => {
     const total     = (stay.numberOfNights * stay.dailyRate) + (stay.extras || 0);
     const invoiceId = randomUUID();
 
+    // UPDATE atômico — só altera se checkouttime ainda for null. Previne race entre
+    // dois checkouts simultâneos no mesmo stay.
+    const { data: claimed, error: claimErr } = await db.supabase
+      .from('stays')
+      .update({ checkouttime: now, paymentmethod: paymentMethod })
+      .eq('id', stayId)
+      .is('checkouttime', null)
+      .select('id');
+    if (claimErr) throw claimErr;
+    if (!claimed || !claimed.length)
+      return res.status(409).json({ error: 'Checkout já realizado', code: 'ALREADY_CHECKED_OUT' });
+
     await Promise.all([
-      db.update('stays', stayId, { checkoutTime: now, paymentMethod }),
       db.insert('invoices', {
         id: invoiceId, hotelId: stay.hotelId, stayId,
-        total, paymentMethod, status: paymentStatus || 'paid',
+        total, paymentMethod, status: paymentStatus,
         nfseStatus: FOCUSNFE_TOKEN ? 'processando' : null,
         createdAt: now,
       }),
@@ -712,6 +740,7 @@ app.put('/api/stays/:stayId/checkout', verifyToken, async (req, res) => {
 
     res.json({ success: true, total, invoiceId, nfseEnabled: !!FOCUSNFE_TOKEN });
   } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
     res.status(500).json({ error: 'Erro ao fazer checkout', code: 'INTERNAL_ERROR' });
   }
 });
@@ -1403,8 +1432,13 @@ function parseReportParams(req, res) {
 }
 
 async function occupiedRoomNightsInPeriod(hotelId, from, to) {
+  // Stay sobrepõe [from, to] se checkin <= to E (checkout > from OU checkout NULL)
   const stays = await db.q(
-    `SELECT checkintime, checkouttime FROM stays WHERE hotelid = $1`, [hotelId]
+    `SELECT checkintime, checkouttime FROM stays
+     WHERE hotelid = $1
+       AND DATE(checkintime) <= $3::date
+       AND (checkouttime IS NULL OR DATE(checkouttime) > $2::date)`,
+    [hotelId, from, to]
   );
   const dates = dateRange(from, to);
   let total = 0;
@@ -1657,20 +1691,22 @@ app.get('/api/hotels/:hotelId/fnrh', verifyToken, enforceHotelOwnership, async (
     const { hotelId } = req.params;
     const { month, exported, page = '1', limit = '20' } = req.query;
 
-    let sql    = 'SELECT * FROM fnrh_records WHERE hotelid = $1';
     const params = [hotelId];
+    let where    = 'WHERE hotelid = $1';
+    if (month)                   { where += ` AND TO_CHAR(arrivaldate,'YYYY-MM') = $${params.push(month)}`; }
+    if (exported !== undefined)  { where += ` AND exportedtosismatur = $${params.push(exported === 'true')}`; }
 
-    if (month)    { sql += ` AND TO_CHAR(arrivaldate,'YYYY-MM') = $${params.push(month)}`; }
-    if (exported !== undefined) { sql += ` AND exportedtosismatur = $${params.push(exported === 'true')}`; }
-    sql += ' ORDER BY arrivaldate DESC';
+    const pageNum = Math.max(1, parseInt(page));
+    const lim     = Math.min(100, Math.max(1, parseInt(limit)));
+    const offset  = (pageNum - 1) * lim;
 
-    const rows     = await db.q(sql, params);
-    const records  = rows.map(r => db.FROM_DB.fnrh_records(r));
-    const total    = records.length;
-    const pageNum  = Math.max(1, parseInt(page));
-    const lim      = Math.min(100, Math.max(1, parseInt(limit)));
-    const data     = records.slice((pageNum - 1) * lim, pageNum * lim);
-
+    const [{ cnt: total }] = await db.q(`SELECT COUNT(*)::int AS cnt FROM fnrh_records ${where}`, params);
+    const dataParams = [...params, lim, offset];
+    const rows = await db.q(
+      `SELECT * FROM fnrh_records ${where} ORDER BY arrivaldate DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      dataParams
+    );
+    const data = rows.map(r => db.FROM_DB.fnrh_records(r));
     res.json({ total, page: pageNum, limit: lim, pages: Math.ceil(total / lim), data });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao listar FNRHs', code: 'INTERNAL_ERROR' });
