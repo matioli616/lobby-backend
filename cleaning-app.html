@@ -449,7 +449,7 @@
 /* ──────────────────────────────────────────────────
    CONFIG
 ────────────────────────────────────────────────── */
-var API_URL       = 'https://lobby-backend-tp84.onrender.com';
+var API_URL       = '';
 var POLL_INTERVAL = 60000; // ms
 
 /* ──────────────────────────────────────────────────
@@ -868,6 +868,18 @@ async function confirmComplete() {
   var notes = document.getElementById('modal-notes').value.trim();
   var body  = {};
   if (notes) body.notes = notes;
+
+  var photoFile = document.getElementById('photo-input').files[0];
+  if (photoFile) {
+    try {
+      body.completionPhoto = await new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload  = function (e) { resolve(e.target.result); };
+        reader.onerror = reject;
+        reader.readAsDataURL(photoFile);
+      });
+    } catch (_) { /* ignora erro de leitura, envia sem foto */ }
+  }
 
   try {
     var resp = await fetch(

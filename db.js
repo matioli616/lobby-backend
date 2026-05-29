@@ -66,6 +66,7 @@ const FROM_DB = {
     actualMinutes: r.actualminutes, notes: r.notes,
     startedAt: toISOStr(r.startedat), completedAt: toISOStr(r.completedat),
     inspectedAt: toISOStr(r.inspectedat), inspectedBy: r.inspectedby,
+    completionPhoto: r.completionphoto ?? null,
     createdAt: toISOStr(r.createdat),
   },
   cleaning_inspections: (r) => !r ? null : {

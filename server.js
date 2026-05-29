@@ -122,7 +122,7 @@ app.use((req, res, next) => {
   res.status(403).json({ error: 'Origem não permitida', code: 'CORS_ERROR' });
 });
 
-app.use(express.json({ limit: '100kb' }));
+app.use(express.json({ limit: '2mb' }));
 
 // ============ RATE LIMITING ============
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
@@ -366,8 +366,9 @@ const CleaningTaskSchema = z.object({
   notes:            z.string().max(500).optional().nullable(),
 });
 const CompleteTaskSchema = z.object({
-  actualMinutes: z.number().min(1).max(480).optional().nullable(),
-  notes:         z.string().max(500).optional().nullable(),
+  actualMinutes:   z.number().min(1).max(480).optional().nullable(),
+  notes:           z.string().max(500).optional().nullable(),
+  completionPhoto: z.string().max(2_000_000).optional().nullable(), // base64, ~1.5 MB
 });
 const InspectTaskSchema = z.object({
   score:  z.number().min(1).max(5),
@@ -1094,7 +1095,7 @@ app.put('/api/cleaning/tasks/:taskId/complete', verifyToken, async (req, res) =>
     if (task.status !== 'in_progress')
       return res.status(400).json({ error: 'Tarefa não está em andamento', code: 'INVALID_STATUS' });
 
-    const { actualMinutes, notes } = CompleteTaskSchema.parse(req.body);
+    const { actualMinutes, notes, completionPhoto } = CompleteTaskSchema.parse(req.body);
     const now = new Date();
     const calcMinutes = actualMinutes ?? (task.startedAt
       ? Math.round((now - new Date(task.startedAt)) / 60000) : null);
@@ -1102,7 +1103,8 @@ app.put('/api/cleaning/tasks/:taskId/complete', verifyToken, async (req, res) =>
     const updated = await db.update('cleaning_tasks', task.id, {
       status: 'done', completedAt: now.toISOString(),
       actualMinutes: calcMinutes,
-      ...(notes ? { notes } : {}),
+      ...(notes           ? { notes }           : {}),
+      ...(completionPhoto ? { completionPhoto }  : {}),
     });
     res.json(updated);
   } catch (err) {
@@ -2173,8 +2175,7 @@ app.get('/api/channels/:hotelSlug/rates', async (req, res) => {
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/cleaning-app.html', (req, res) => res.sendFile(path.join(__dirname, 'cleaning-app.html')));
 app.get('/manifest.json', (req, res) => res.sendFile(path.join(__dirname, 'manifest.json')));
-app.get('/icon-192.png', (req, res) => res.sendFile(path.join(__dirname, 'icon-192.png')));
-app.get('/icon-512.png', (req, res) => res.sendFile(path.join(__dirname, 'icon-512.png')));
+app.get('/icon.svg', (req, res) => res.sendFile(path.join(__dirname, 'icon.svg')));
 app.get('/sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Service-Worker-Allowed', '/');

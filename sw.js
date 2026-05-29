@@ -37,7 +37,7 @@ self.addEventListener('fetch', function (event) {
   var url = new URL(req.url);
 
   /* API calls → network-first, never cache */
-  if (url.hostname === 'lobby-backend-tp84.onrender.com') {
+  if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(req).catch(function () {
         return new Response(
