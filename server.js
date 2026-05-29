@@ -7,7 +7,14 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const { randomUUID } = require('crypto');
+const webpush = require('web-push');
 const db = require('./db');
+
+webpush.setVapidDetails(
+  process.env.VAPID_CONTACT,
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
@@ -1060,6 +1067,16 @@ app.post('/api/hotels/:hotelId/cleaning/tasks', verifyToken, enforceHotelOwnersh
       notes: notes || null, startedAt: null, completedAt: null,
       inspectedAt: null, inspectedBy: null,
     });
+
+    if (assignedTo) {
+      const prioLabel = { urgent: '🔴 Urgente', high: '🟠 Alta', normal: '🔵 Normal', low: '⚪ Baixa' };
+      sendPushToStaff(assignedTo, {
+        title: `Quarto ${room.roomNumber} — nova tarefa`,
+        body:  `Prioridade ${prioLabel[priority] || priority}${notes ? ': ' + notes : ''}`,
+        url:   '/cleaning-app.html',
+      });
+    }
+
     res.status(201).json(task);
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors[0].message, code: 'VALIDATION_ERROR' });
@@ -1198,10 +1215,21 @@ app.post('/api/hotels/:hotelId/cleaning/tasks/generate-daily', verifyToken, enfo
         notes: null, startedAt: null, completedAt: null,
         inspectedAt: null, inspectedBy: null,
       });
-      created.push(task);
+      created.push({ task, assignedTo });
     }
 
-    res.status(201).json({ created: created.length, tasks: created });
+    const prioLabel = { urgent: '🔴 Urgente', high: '🟠 Alta', normal: '🔵 Normal', low: '⚪ Baixa' };
+    for (const { task, assignedTo } of created) {
+      if (assignedTo) {
+        sendPushToStaff(assignedTo, {
+          title: `Quarto ${task.roomId} — tarefa do dia`,
+          body:  prioLabel[task.priority] || task.priority,
+          url:   '/cleaning-app.html',
+        });
+      }
+    }
+
+    res.status(201).json({ created: created.length, tasks: created.map(c => c.task) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erro ao gerar tarefas', code: 'INTERNAL_ERROR' });
@@ -1263,6 +1291,52 @@ app.get('/api/cleaning/my-tasks', verifyStaffToken, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'Erro ao buscar tarefas', code: 'INTERNAL_ERROR' });
   }
+});
+
+// ── Push helpers ─────────────────────────────────────────────────────────────
+
+async function sendPushToStaff(staffId, payload) {
+  try {
+    const rows = await db.q(
+      `SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE staffid = $1`,
+      [staffId]
+    );
+    await Promise.allSettled(rows.map(r =>
+      webpush.sendNotification(
+        { endpoint: r.endpoint, keys: { p256dh: r.p256dh, auth: r.auth } },
+        JSON.stringify(payload)
+      ).catch(async err => {
+        // subscription expirada ou inválida — remove do banco
+        if (err.statusCode === 410 || err.statusCode === 404) {
+          await db.q(`DELETE FROM push_subscriptions WHERE endpoint = $1`, [r.endpoint]);
+        }
+      })
+    ));
+  } catch (_) { /* push é best-effort, nunca quebra o fluxo principal */ }
+}
+
+// Salvar push subscription da faxineira
+app.post('/api/cleaning/push-subscribe', verifyStaffToken, async (req, res) => {
+  const { endpoint, keys } = req.body || {};
+  if (!endpoint || !keys?.p256dh || !keys?.auth)
+    return res.status(400).json({ error: 'Subscription inválida', code: 'INVALID_PAYLOAD' });
+  try {
+    await db.q(
+      `INSERT INTO push_subscriptions (id, staffid, hotelid, endpoint, p256dh, auth)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (staffid, endpoint) DO UPDATE SET p256dh = $5, auth = $6`,
+      [randomUUID(), req.staff.id, req.staff.hotelId, endpoint, keys.p256dh, keys.auth]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[push-subscribe]', err);
+    res.status(500).json({ error: 'Erro ao salvar subscription', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// VAPID public key — necessária para o cliente fazer subscribe
+app.get('/api/cleaning/vapid-public-key', (req, res) => {
+  res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
 });
 
 // ============ ROUTES: TARIFÁRIO DINÂMICO ============

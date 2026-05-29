@@ -486,6 +486,7 @@ document.addEventListener('DOMContentLoaded', function () {
     staffName = localStorage.getItem('lobby_cleaning_name') || '';
     showTasksScreen();
     loadTasks();
+    subscribePush();
     return;
   }
 
@@ -582,6 +583,7 @@ async function doLogin() {
 
     showTasksScreen();
     loadTasks();
+    subscribePush();
   } catch (err) {
     document.getElementById('login-error').textContent = err.message;
     clearPin();
@@ -920,12 +922,56 @@ function showToast(msg, type) {
 }
 
 /* ──────────────────────────────────────────────────
-   SERVICE WORKER REGISTRATION
+   SERVICE WORKER + PUSH
 ────────────────────────────────────────────────── */
+var swReg = null;
+
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('/sw.js').catch(function () {});
+    navigator.serviceWorker.register('/sw.js')
+      .then(function (reg) { swReg = reg; })
+      .catch(function () {});
   });
+}
+
+async function subscribePush() {
+  if (!swReg || !('PushManager' in window)) return;
+  try {
+    var permission = await Notification.requestPermission();
+    if (permission !== 'granted') return;
+
+    var existing = await swReg.pushManager.getSubscription();
+    if (existing) { sendSubscriptionToServer(existing); return; }
+
+    var keyResp = await fetch(API_URL + '/api/cleaning/vapid-public-key');
+    var { publicKey } = await keyResp.json();
+
+    var sub = await swReg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+    sendSubscriptionToServer(sub);
+  } catch (_) { /* permissão negada ou browser não suporta — ignora */ }
+}
+
+async function sendSubscriptionToServer(sub) {
+  try {
+    var json = sub.toJSON();
+    await fetch(API_URL + '/api/cleaning/push-subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }),
+    });
+  } catch (_) {}
+}
+
+function urlBase64ToUint8Array(base64String) {
+  var padding = '='.repeat((4 - base64String.length % 4) % 4);
+  var base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  var raw     = atob(base64);
+  var arr     = new Uint8Array(raw.length);
+  for (var i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
 }
 </script>
 </body>

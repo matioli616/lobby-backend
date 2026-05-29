@@ -1,6 +1,6 @@
 'use strict';
 
-var CACHE_NAME   = 'lobby-cleaning-v1';
+var CACHE_NAME   = 'lobby-cleaning-v2';
 var STATIC_FILES = [
   '/cleaning-app.html',
   '/manifest.json'
@@ -52,7 +52,9 @@ self.addEventListener('fetch', function (event) {
     return;
   }
 
-  /* Static assets → cache-first, then network + update cache */
+  /* Static assets → cache-first, then network + update cache (skip chrome-extension) */
+  if (!url.protocol.startsWith('http')) return;
+
   event.respondWith(
     caches.match(req).then(function (cached) {
       if (cached) return cached;
@@ -72,6 +74,41 @@ self.addEventListener('fetch', function (event) {
         }
         return new Response('', { status: 503 });
       });
+    })
+  );
+});
+
+/* ── PUSH ───────────────────────────────────────── */
+self.addEventListener('push', function (event) {
+  var data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (_) {}
+
+  var title   = data.title || 'LOBBY Limpeza';
+  var options = {
+    body:     data.body  || 'Nova tarefa disponível',
+    icon:     '/icon.svg',
+    badge:    '/icon.svg',
+    tag:      'lobby-task',
+    renotify: true,
+    data:     { url: data.url || '/cleaning-app.html' },
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+/* ── NOTIFICATION CLICK ─────────────────────────── */
+self.addEventListener('notificationclick', function (event) {
+  event.notification.close();
+  var target = (event.notification.data && event.notification.data.url) || '/cleaning-app.html';
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].url.includes('cleaning-app') && 'focus' in list[i]) {
+          return list[i].focus();
+        }
+      }
+      return clients.openWindow(target);
     })
   );
 });
