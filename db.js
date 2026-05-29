@@ -52,7 +52,7 @@ const FROM_DB = {
     createdAt: toISOStr(r.createdat), updatedAt: toISOStr(r.updatedat),
   },
   hotels: (r) => !r ? null : {
-    id: r.id, name: r.name,
+    id: r.id, name: r.name, slug: r.slug ?? null,
     weekdayMultipliers: r.weekdaymultipliers ?? {'0':1,'1':1,'2':1,'3':1,'4':1,'5':1.2,'6':1.3},
     createdAt: toISOStr(r.createdat), updatedAt: toISOStr(r.updatedat),
   },
@@ -93,6 +93,13 @@ const FROM_DB = {
     startDate: toDateStr(r.startdate), endDate: toDateStr(r.enddate),
     priceMultiplier: toFloat(r.pricemultiplier) ?? 1,
     createdAt: toISOStr(r.createdat),
+  },
+  integrations: (r) => !r ? null : {
+    id: r.id, hotelId: r.hotelid, type: r.type,
+    apiKey: r.apikey, apiSecret: r.apisecret, status: r.status,
+    lastSyncDate: toISOStr(r.lastsyncdate), syncFrequency: r.syncfrequency,
+    errorLog: r.errorlog,
+    createdAt: toISOStr(r.createdat), updatedAt: toISOStr(r.updatedat),
   },
   reservations: (r) => !r ? null : {
     id: r.id, hotelId: r.hotelid, guestId: r.guestid, roomId: r.roomid,

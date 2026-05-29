@@ -144,7 +144,7 @@ async function seedDatabase() {
 
   // Hotel (usa supabase-js — weekdaymultipliers é JSONB, não pode ir via exec_sql params)
   await db.supabase.from('hotels').upsert(
-    { id: HOTEL_ID, name: 'Hotel Demo LOBBY', weekdaymultipliers: {'0':1.0,'1':1.0,'2':1.0,'3':1.0,'4':1.0,'5':1.2,'6':1.3} },
+    { id: HOTEL_ID, name: 'Hotel Demo LOBBY', slug: 'demo', weekdaymultipliers: {'0':1.0,'1':1.0,'2':1.0,'3':1.0,'4':1.0,'5':1.2,'6':1.3} },
     { onConflict: 'id', ignoreDuplicates: true }
   );
 
@@ -1790,6 +1790,382 @@ app.get('/api/hotels/:hotelId/fnrh/export', verifyToken, enforceHotelOwnership, 
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erro ao exportar FNRH', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// ============ ROUTES: CHANNEL MANAGER ============
+
+const IntegrationSchema = z.object({
+  type:   z.enum(['booking.com', 'decolar']),
+  apiKey: z.string().min(16).max(128),
+  status: z.enum(['active', 'inactive']).default('active'),
+});
+
+// Listar canais configurados
+app.get('/api/hotels/:hotelId/channels', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const rows = await db.q(
+      `SELECT * FROM integrations WHERE hotelid = $1 AND type IN ('booking.com', 'decolar') ORDER BY createdat`,
+      [hotelId]
+    );
+    res.json(rows.map(db.FROM_DB.integrations));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao listar canais', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Configurar canal (upsert)
+app.post('/api/hotels/:hotelId/channels', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const body = IntegrationSchema.parse(req.body);
+    const [existing] = await db.q(
+      `SELECT id FROM integrations WHERE hotelid = $1 AND type = $2 LIMIT 1`,
+      [hotelId, body.type]
+    );
+    let channel;
+    if (existing) {
+      channel = await db.update('integrations', existing.id, { apiKey: body.apiKey, status: body.status });
+    } else {
+      channel = await db.insert('integrations', {
+        id: randomUUID(), hotelId, type: body.type, apiKey: body.apiKey, status: body.status,
+      });
+    }
+    res.status(201).json(channel);
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(422).json({ error: 'Dados inválidos', details: err.errors });
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao configurar canal', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Atualizar canal
+app.put('/api/hotels/:hotelId/channels/:channelId', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId, channelId } = req.params;
+    const integration = await db.getById('integrations', channelId);
+    if (!integration || integration.hotelId !== hotelId)
+      return res.status(404).json({ error: 'Canal não encontrado', code: 'NOT_FOUND' });
+    const body = IntegrationSchema.partial().parse(req.body);
+    const updated = await db.update('integrations', channelId, body);
+    res.json(updated);
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(422).json({ error: 'Dados inválidos', details: err.errors });
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao atualizar canal', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Remover canal
+app.delete('/api/hotels/:hotelId/channels/:channelId', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId, channelId } = req.params;
+    const integration = await db.getById('integrations', channelId);
+    if (!integration || integration.hotelId !== hotelId)
+      return res.status(404).json({ error: 'Canal não encontrado', code: 'NOT_FOUND' });
+    await db.del('integrations', channelId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao remover canal', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// Stats por canal
+app.get('/api/hotels/:hotelId/channels/stats', verifyToken, enforceHotelOwnership, async (req, res) => {
+  try {
+    const { hotelId } = req.params;
+    const rows = await db.q(
+      `SELECT channel, COUNT(*)::int AS reservations,
+              COALESCE(SUM(totalvalue), 0)::float AS revenue
+       FROM reservations WHERE hotelid = $1 AND status != 'cancelled'
+       GROUP BY channel ORDER BY revenue DESC`,
+      [hotelId]
+    );
+    res.json(rows.map(r => ({
+      channel: r.channel,
+      reservations: r.reservations,
+      revenue: parseFloat(r.revenue),
+    })));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao buscar estatísticas de canais', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// ── helpers internos ──────────────────────────────────────────────────────────
+
+async function authenticateWebhook(hotelSlug, channelType, apiKey) {
+  const [hotel] = await db.q(`SELECT id FROM hotels WHERE slug = $1 LIMIT 1`, [hotelSlug]);
+  if (!hotel) return null;
+  const [integration] = await db.q(
+    `SELECT id FROM integrations WHERE hotelid = $1 AND type = $2 AND status = 'active' AND apikey = $3 LIMIT 1`,
+    [hotel.id, channelType, apiKey]
+  );
+  if (!integration) return null;
+  return { hotelId: hotel.id };
+}
+
+async function findOrCreateGuest(hotelId, { name, email, phone, document }) {
+  if (email) {
+    const [existing] = await db.q(
+      `SELECT id FROM guests WHERE hotelid = $1 AND email = $2 LIMIT 1`, [hotelId, email]
+    );
+    if (existing) return existing.id;
+  }
+  const guest = await db.insert('guests', {
+    id: randomUUID(), hotelId, name, email: email || null, phone: phone || null,
+    cpf: document || null, totalStays: 0, totalSpent: 0, vipScore: 0,
+  });
+  return guest.id;
+}
+
+async function findAvailableRoom(hotelId, roomType, checkinDate, checkoutDate) {
+  const [room] = await db.q(
+    `SELECT r.id FROM rooms r
+     WHERE r.hotelid = $1 AND LOWER(r.roomtype) = LOWER($2)
+       AND r.status != 'maintenance'
+       AND NOT EXISTS (
+         SELECT 1 FROM reservations res
+         WHERE res.roomid = r.id AND res.status = 'confirmed'
+           AND res.checkindate < $4::date AND res.checkoutdate > $3::date
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM stays s
+         WHERE s.roomid = r.id AND s.checkouttime IS NULL
+           AND (s.checkintime::date + s.numberofnights * INTERVAL '1 day')::date > $3::date
+       )
+     LIMIT 1`,
+    [hotelId, roomType, checkinDate, checkoutDate]
+  );
+  return room || null;
+}
+
+// ── Webhook Booking.com ───────────────────────────────────────────────────────
+// Header: X-Booking-Api-Key
+// Body: { reservation_id, room_type, check_in, check_out, guests_count, total_price,
+//         guest: { first_name, last_name, email, phone, document }, special_requests }
+app.post('/api/webhook/booking/:hotelSlug', async (req, res) => {
+  try {
+    const apiKey = req.headers['x-booking-api-key'];
+    if (!apiKey) return res.status(401).json({ error: 'X-Booking-Api-Key obrigatório', code: 'UNAUTHORIZED' });
+
+    const auth = await authenticateWebhook(req.params.hotelSlug, 'booking.com', apiKey);
+    if (!auth) return res.status(401).json({ error: 'Credenciais inválidas', code: 'UNAUTHORIZED' });
+
+    const { hotelId } = auth;
+    const b = req.body;
+
+    if (!b.reservation_id || !b.room_type || !b.check_in || !b.check_out || !b.guest)
+      return res.status(400).json({ error: 'Payload inválido', code: 'INVALID_PAYLOAD' });
+    if (!isCalendarDate(b.check_in) || !isCalendarDate(b.check_out) || b.check_out <= b.check_in)
+      return res.status(400).json({ error: 'Datas inválidas', code: 'INVALID_DATES' });
+
+    // Idempotência — evita duplicata
+    const [dup] = await db.q(
+      `SELECT id FROM reservations WHERE hotelid = $1 AND source = $2 LIMIT 1`,
+      [hotelId, `booking:${b.reservation_id}`]
+    );
+    if (dup) return res.json({ message: 'Reserva já processada', reservationId: dup.id });
+
+    const room = await findAvailableRoom(hotelId, b.room_type, b.check_in, b.check_out);
+    if (!room) return res.status(409).json({ error: 'Nenhum quarto disponível para esse tipo e período', code: 'NO_ROOM_AVAILABLE' });
+
+    const guestId = await findOrCreateGuest(hotelId, {
+      name:     `${b.guest.first_name} ${b.guest.last_name}`.trim(),
+      email:    b.guest.email,
+      phone:    b.guest.phone,
+      document: b.guest.document,
+    });
+
+    const nights   = diffDays(b.check_in, b.check_out);
+    const roomData = await db.getById('rooms', room.id);
+    const totalValue = b.total_price ?? (roomData.dailyRate * nights);
+
+    const reservation = await db.insert('reservations', {
+      id: randomUUID(), hotelId, guestId, roomId: room.id,
+      checkinDate: b.check_in, checkoutDate: b.check_out,
+      numberOfNights: nights, numberOfGuests: b.guests_count ?? 1,
+      channel: 'booking.com', source: `booking:${b.reservation_id}`,
+      status: 'confirmed', dailyRate: roomData.dailyRate, totalValue,
+      depositPaid: 0, specialRequests: b.special_requests || null,
+    });
+
+    await db.supabase.from('integrations')
+      .update({ lastsyncdate: new Date().toISOString() })
+      .eq('hotelid', hotelId).eq('type', 'booking.com');
+
+    res.status(201).json({ success: true, reservationId: reservation.id });
+  } catch (err) {
+    console.error('[webhook/booking]', err);
+    res.status(500).json({ error: 'Erro interno ao processar reserva', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// ── Webhook Decolar ───────────────────────────────────────────────────────────
+// Header: X-Decolar-Api-Key
+// Body: { bookingId, roomTypeId, arrivalDate, departureDate, adultsCount, bookingAmount,
+//         traveler: { firstName, lastName, emailAddress, phoneNumber, documentNumber }, specialRequest }
+app.post('/api/webhook/decolar/:hotelSlug', async (req, res) => {
+  try {
+    const apiKey = req.headers['x-decolar-api-key'];
+    if (!apiKey) return res.status(401).json({ error: 'X-Decolar-Api-Key obrigatório', code: 'UNAUTHORIZED' });
+
+    const auth = await authenticateWebhook(req.params.hotelSlug, 'decolar', apiKey);
+    if (!auth) return res.status(401).json({ error: 'Credenciais inválidas', code: 'UNAUTHORIZED' });
+
+    const { hotelId } = auth;
+    const b = req.body;
+
+    if (!b.bookingId || !b.roomTypeId || !b.arrivalDate || !b.departureDate || !b.traveler)
+      return res.status(400).json({ error: 'Payload inválido', code: 'INVALID_PAYLOAD' });
+    if (!isCalendarDate(b.arrivalDate) || !isCalendarDate(b.departureDate) || b.departureDate <= b.arrivalDate)
+      return res.status(400).json({ error: 'Datas inválidas', code: 'INVALID_DATES' });
+
+    const [dup] = await db.q(
+      `SELECT id FROM reservations WHERE hotelid = $1 AND source = $2 LIMIT 1`,
+      [hotelId, `decolar:${b.bookingId}`]
+    );
+    if (dup) return res.json({ message: 'Reserva já processada', reservationId: dup.id });
+
+    const room = await findAvailableRoom(hotelId, b.roomTypeId, b.arrivalDate, b.departureDate);
+    if (!room) return res.status(409).json({ error: 'Nenhum quarto disponível para esse tipo e período', code: 'NO_ROOM_AVAILABLE' });
+
+    const guestId = await findOrCreateGuest(hotelId, {
+      name:     `${b.traveler.firstName} ${b.traveler.lastName}`.trim(),
+      email:    b.traveler.emailAddress,
+      phone:    b.traveler.phoneNumber,
+      document: b.traveler.documentNumber,
+    });
+
+    const nights   = diffDays(b.arrivalDate, b.departureDate);
+    const roomData = await db.getById('rooms', room.id);
+    const totalValue = b.bookingAmount ?? (roomData.dailyRate * nights);
+
+    const reservation = await db.insert('reservations', {
+      id: randomUUID(), hotelId, guestId, roomId: room.id,
+      checkinDate: b.arrivalDate, checkoutDate: b.departureDate,
+      numberOfNights: nights, numberOfGuests: b.adultsCount ?? 1,
+      channel: 'decolar', source: `decolar:${b.bookingId}`,
+      status: 'confirmed', dailyRate: roomData.dailyRate, totalValue,
+      depositPaid: 0, specialRequests: b.specialRequest || null,
+    });
+
+    await db.supabase.from('integrations')
+      .update({ lastsyncdate: new Date().toISOString() })
+      .eq('hotelid', hotelId).eq('type', 'decolar');
+
+    res.status(201).json({ success: true, reservationId: reservation.id });
+  } catch (err) {
+    console.error('[webhook/decolar]', err);
+    res.status(500).json({ error: 'Erro interno ao processar reserva', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// ── Disponibilidade para OTAs ────────────────────────────────────────────────
+// Header: X-Api-Key  |  Query: ?from=YYYY-MM-DD&to=YYYY-MM-DD
+app.get('/api/channels/:hotelSlug/availability', async (req, res) => {
+  try {
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey) return res.status(401).json({ error: 'X-Api-Key obrigatório', code: 'UNAUTHORIZED' });
+
+    const [hotel] = await db.q(`SELECT id FROM hotels WHERE slug = $1 LIMIT 1`, [req.params.hotelSlug]);
+    if (!hotel) return res.status(404).json({ error: 'Hotel não encontrado', code: 'NOT_FOUND' });
+
+    const [integration] = await db.q(
+      `SELECT id FROM integrations WHERE hotelid = $1 AND apikey = $2 AND status = 'active' LIMIT 1`,
+      [hotel.id, apiKey]
+    );
+    if (!integration) return res.status(401).json({ error: 'Credenciais inválidas', code: 'UNAUTHORIZED' });
+
+    const { from, to } = req.query;
+    if (!from || !to || !isCalendarDate(from) || !isCalendarDate(to) || to <= from)
+      return res.status(400).json({ error: 'Parâmetros from e to são obrigatórios (YYYY-MM-DD)', code: 'INVALID_PARAMS' });
+
+    const rooms = await db.q(
+      `SELECT r.id, r.roomnumber, r.roomtype, r.capacity, r.dailyrate,
+              (r.status != 'maintenance'
+               AND NOT EXISTS (
+                 SELECT 1 FROM reservations res
+                 WHERE res.roomid = r.id AND res.status = 'confirmed'
+                   AND res.checkindate < $3::date AND res.checkoutdate > $2::date
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM stays s
+                 WHERE s.roomid = r.id AND s.checkouttime IS NULL
+                   AND (s.checkintime::date + s.numberofnights * INTERVAL '1 day')::date > $2::date
+               )
+              ) AS available
+       FROM rooms r WHERE r.hotelid = $1 ORDER BY r.roomnumber`,
+      [hotel.id, from, to]
+    );
+
+    res.json({
+      hotelSlug: req.params.hotelSlug,
+      from, to,
+      rooms: rooms.map(r => ({
+        id: r.id,
+        roomNumber: r.roomnumber,
+        roomType: r.roomtype,
+        capacity: r.capacity,
+        dailyRate: parseFloat(r.dailyrate),
+        available: r.available,
+      })),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao consultar disponibilidade', code: 'INTERNAL_ERROR' });
+  }
+});
+
+// ── Tarifas para OTAs ────────────────────────────────────────────────────────
+// Header: X-Api-Key  |  Query: ?from=YYYY-MM-DD&to=YYYY-MM-DD
+app.get('/api/channels/:hotelSlug/rates', async (req, res) => {
+  try {
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey) return res.status(401).json({ error: 'X-Api-Key obrigatório', code: 'UNAUTHORIZED' });
+
+    const [hotel] = await db.q(
+      `SELECT id, weekdaymultipliers FROM hotels WHERE slug = $1 LIMIT 1`, [req.params.hotelSlug]
+    );
+    if (!hotel) return res.status(404).json({ error: 'Hotel não encontrado', code: 'NOT_FOUND' });
+
+    const [integration] = await db.q(
+      `SELECT id FROM integrations WHERE hotelid = $1 AND apikey = $2 AND status = 'active' LIMIT 1`,
+      [hotel.id, apiKey]
+    );
+    if (!integration) return res.status(401).json({ error: 'Credenciais inválidas', code: 'UNAUTHORIZED' });
+
+    const { from, to } = req.query;
+    if (!from || !to || !isCalendarDate(from) || !isCalendarDate(to) || to <= from)
+      return res.status(400).json({ error: 'Parâmetros from e to são obrigatórios', code: 'INVALID_PARAMS' });
+
+    const [roomTypes, seasons] = await Promise.all([
+      db.q(
+        `SELECT DISTINCT ON (roomtype) roomtype, dailyrate FROM rooms WHERE hotelid = $1 ORDER BY roomtype, dailyrate`,
+        [hotel.id]
+      ),
+      db.q(
+        `SELECT type, pricemultiplier, startdate::text, enddate::text FROM seasons
+         WHERE hotelid = $1 AND startdate <= $3::date AND enddate >= $2::date`,
+        [hotel.id, from, to]
+      ),
+    ]);
+
+    res.json({
+      hotelSlug: req.params.hotelSlug,
+      from, to,
+      roomTypes: roomTypes.map(r => ({ roomType: r.roomtype, baseRate: parseFloat(r.dailyrate) })),
+      seasons: seasons.map(s => ({
+        type: s.type, multiplier: parseFloat(s.pricemultiplier), from: s.startdate, to: s.enddate,
+      })),
+      weekdayMultipliers: hotel.weekdaymultipliers ?? {'0':1,'1':1,'2':1,'3':1,'4':1,'5':1.2,'6':1.3},
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao consultar tarifas', code: 'INTERNAL_ERROR' });
   }
 });
 
