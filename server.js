@@ -10,11 +10,15 @@ const { randomUUID } = require('crypto');
 const webpush = require('web-push');
 const db = require('./db');
 
-webpush.setVapidDetails(
-  process.env.VAPID_CONTACT,
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
+if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(
+    process.env.VAPID_CONTACT || 'mailto:admin@lobby.app',
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+} else {
+  console.warn('⚠️  VAPID keys não configuradas — push notifications desabilitadas');
+}
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
